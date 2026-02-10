@@ -8,6 +8,14 @@
 -- Public Constants.
 -------------------------------------------------------------------------------------
 
+-- Upvalue caches for frequently called functions.
+local string_find, string_gsub = string.find, string.gsub
+local table_insert, table_getn, table_remove = table.insert, table.getn, table.remove
+local GetTime = GetTime
+local getglobal = getglobal
+local strlower = strlower
+local tonumber = tonumber
+
 -- Display types for incoming, outgoing, and notification events.
 MikSBT.DISPLAYTYPE_INCOMING			= 1;
 MikSBT.DISPLAYTYPE_OUTGOING			= 2;
@@ -117,6 +125,9 @@ ICON_CACHE["effet inferno"] =					"Interface\\Icons\\spell_fire_incinerate"
 
 -- Cache des spells dont l'icone n'a pas été trouvée
 NO_ICON_CACHE = {}
+
+-- Cache for spellId-based icon lookups (bypasses Babble-Spell and tooltip scanning).
+local spellIdIconCache = {}
 
 -- Babble-Spell pour les icones des spells de classe
 local BS = AceLibrary("Babble-Spell-2.2")
@@ -290,7 +301,7 @@ function MikSBT.OnUpdate()
    stillMerging = true;
 
    -- Merge like events.
-   local numEvents = table.getn(mergeData.UnmergedEvents);
+   local numEvents = table_getn(mergeData.UnmergedEvents);
    MikSBT.MergeEvents(mergeData, numEvents);
 
    -- Add the merged animation events to the animation system.
@@ -299,9 +310,9 @@ function MikSBT.OnUpdate()
    end
 
    -- Clear the merged animation events array.
-   local numMergedEvents = table.getn(mergeData.MergedEvents);
+   local numMergedEvents = table_getn(mergeData.MergedEvents);
    for i = 1, numMergedEvents do
-    table.remove(mergeData.MergedEvents, 1);
+    table_remove(mergeData.MergedEvents, 1);
    end
 
 
@@ -390,6 +401,13 @@ function MikSBT.Init()
 
  -- Register the triggers with the combat event helper.
  MikSBT.RegisterTriggers();
+
+ -- Enable Nampower CVars for enhanced combat events when available.
+ if MikCEH.hasNampower then
+  pcall(SetCVar, "NP_EnableAutoAttackEvents", "1")
+  pcall(SetCVar, "NP_EnableSpellHealEvents", "1")
+  pcall(SetCVar, "NP_EnableSpellEnergizeEvents", "1")
+ end
 
  -- Disable or enable the mod depending on the saved setting.
  MikSBT.SetOptionUserDisabled(MikSBT_Save.UserDisabled)
@@ -596,6 +614,7 @@ function MikSBT.CombatEventsHandler(combatEvent)
  -- end
  animationEvent.EffectName = combatEvent.EffectName;
  animationEvent.Name = combatEvent.Name;
+ animationEvent.SpellId = combatEvent.SpellId;
 
  -- Check if there is a damage type and get the appropriate string.
  if (combatEvent.DamageType ~= nil) then
@@ -605,19 +624,19 @@ function MikSBT.CombatEventsHandler(combatEvent)
  -- If there are partial action types set the partial effect text appropriately.
  if (combatEvent.PartialActionType == MikCEH.PARTIALACTIONTYPE_ABSORB) then
   if (ABSORB_TRAILER) then
-   animationEvent.PartialEffectText = "\124cffFAFA00\124h"..string.gsub(ABSORB_TRAILER, "%%d", combatEvent.PartialAmount).."\124h\124r";
+   animationEvent.PartialEffectText = "\124cffFAFA00\124h"..string_gsub(ABSORB_TRAILER, "%%d", combatEvent.PartialAmount).."\124h\124r";
   end
  elseif (combatEvent.PartialActionType == MikCEH.PARTIALACTIONTYPE_BLOCK) then
   if (BLOCK_TRAILER) then
-   animationEvent.PartialEffectText = "\124cff7F00FF\124h"..string.gsub(BLOCK_TRAILER, "%%d", combatEvent.PartialAmount).."\124h\124r";
+   animationEvent.PartialEffectText = "\124cff7F00FF\124h"..string_gsub(BLOCK_TRAILER, "%%d", combatEvent.PartialAmount).."\124h\124r";
   end
  elseif (combatEvent.PartialActionType == MikCEH.PARTIALACTIONTYPE_RESIST) then
   if (RESIST_TRAILER) then
-   animationEvent.PartialEffectText = " \124cff81007F\124h"..string.gsub(RESIST_TRAILER, "%%d", combatEvent.PartialAmount).."\124h\124r";
+   animationEvent.PartialEffectText = " \124cff81007F\124h"..string_gsub(RESIST_TRAILER, "%%d", combatEvent.PartialAmount).."\124h\124r";
   end
  elseif (combatEvent.PartialActionType == MikCEH.PARTIALACTIONTYPE_VULNERABLE) then
   if (MikSBT.MSG_VULERNABLE_TRAILER) then
-   animationEvent.PartialEffectText = string.gsub(MikSBT.MSG_VULERNABLE_TRAILER, "%%d", combatEvent.PartialAmount);
+   animationEvent.PartialEffectText = string_gsub(MikSBT.MSG_VULERNABLE_TRAILER, "%%d", combatEvent.PartialAmount);
   end
  elseif (combatEvent.PartialActionType == MikCEH.PARTIALACTIONTYPE_CRUSHING) then
   if (CRUSHING_TRAILER) then
@@ -809,7 +828,7 @@ function MikSBT.MergeEvents(mergeData, numEvents)
     end
  
     -- Add the animation event to the end of the merged events array.
-    table.insert(mergeData.MergedEvents, animationEvent);
+    table_insert(mergeData.MergedEvents, animationEvent);
    end
  
    -- Reset the event merged flag.
@@ -849,7 +868,7 @@ function MikSBT.MergeEvents(mergeData, numEvents)
   end
 
   -- Remove the event from the unmerged events array.
-  table.remove(mergeData.UnmergedEvents, 1);
+  table_remove(mergeData.UnmergedEvents, 1);
  end
 end
 
@@ -1057,23 +1076,23 @@ function MikSBT.FormatEventText(animationEvent)
   return;
  end
 
-	outputString = string.gsub(outputString, "-%%a", "\124cffff0000\124h-\124h\124r%%a");
+	outputString = string_gsub(outputString, "-%%a", "\124cffff0000\124h-\124h\124r%%a");
 	
 	if (animationEvent.DamageType ~= nil) then
 		if animationEvent.DamageType == SPELL_SCHOOL1_CAP then
-			outputString = string.gsub(outputString, "%%a", "\124cffF6F99E\124h%%a\124h\124r");
+			outputString = string_gsub(outputString, "%%a", "\124cffF6F99E\124h%%a\124h\124r");
 		elseif animationEvent.DamageType == SPELL_SCHOOL2_CAP then
-			outputString = string.gsub(outputString, "%%a", "\124cffFF8080\124h%%a\124h\124r");
+			outputString = string_gsub(outputString, "%%a", "\124cffFF8080\124h%%a\124h\124r");
 		elseif animationEvent.DamageType == SPELL_SCHOOL3_CAP then
-			outputString = string.gsub(outputString, "%%a", "\124cff80FF80\124h%%a\124h\124r");
+			outputString = string_gsub(outputString, "%%a", "\124cff80FF80\124h%%a\124h\124r");
 		elseif animationEvent.DamageType == SPELL_SCHOOL4_CAP then
-			outputString = string.gsub(outputString, "%%a", "\124cff8080FF\124h%%a\124h\124r");
+			outputString = string_gsub(outputString, "%%a", "\124cff8080FF\124h%%a\124h\124r");
 		elseif animationEvent.DamageType == SPELL_SCHOOL5_CAP then
-			outputString = string.gsub(outputString, "%%a", "\124cffA000A0\124h%%a\124h\124r");
+			outputString = string_gsub(outputString, "%%a", "\124cffA000A0\124h%%a\124h\124r");
 		elseif animationEvent.DamageType == SPELL_SCHOOL6_CAP then
-			outputString = string.gsub(outputString, "%%a", "\124cffFFB9FF\124h%%a\124h\124r");
+			outputString = string_gsub(outputString, "%%a", "\124cffFFB9FF\124h%%a\124h\124r");
 		elseif animationEvent.DamageType == "Inconnu" then
-			outputString = string.gsub(outputString, "%%a", "\124cffFFB9FF\124h%%a\124h\124r");
+			outputString = string_gsub(outputString, "%%a", "\124cffFFB9FF\124h%%a\124h\124r");
 			-- DEFAULT_CHAT_FRAME:AddMessage(animationEvent.DamageType)
 		end
 	end
@@ -1082,30 +1101,30 @@ function MikSBT.FormatEventText(animationEvent)
  if (animationEvent.Amount ~= nil) then
   -- Check if there is overheal info 
   if (animationEvent.OverhealAmount ~= nil and MikSBT.CurrentProfile.ShowOverheals) then
-   local overhealTrailer = string.gsub(MikSBT.MSG_OVERHEAL_TRAILER, "%%d", animationEvent.OverhealAmount);
-   outputString = string.gsub(outputString, "%%a", (animationEvent.Amount - animationEvent.OverhealAmount) .. overhealTrailer);
+   local overhealTrailer = string_gsub(MikSBT.MSG_OVERHEAL_TRAILER, "%%d", animationEvent.OverhealAmount);
+   outputString = string_gsub(outputString, "%%a", (animationEvent.Amount - animationEvent.OverhealAmount) .. overhealTrailer);
   else 
-   outputString = string.gsub(outputString, "%%a", animationEvent.Amount);
+   outputString = string_gsub(outputString, "%%a", animationEvent.Amount);
   end
  end
 
  -- Substitute enemy/player names.
  local unitID, unitName =  MikCEH.GetUnitIDFromName(animationEvent.Name)
  if unitName and unitID and not UnitIsUnit(unitID, "player") then
-  outputString = string.gsub(outputString, "%%n", unitName);
+  outputString = string_gsub(outputString, "%%n", unitName);
  else
-  outputString = string.gsub(outputString, "%(%%n%)", "");
-  outputString = string.gsub(outputString, "%%n", "");
+  outputString = string_gsub(outputString, "%(%%n%)", "");
+  outputString = string_gsub(outputString, "%%n", "");
  end
 
  -- Substitute effect names.
  if (animationEvent.EffectName ~= nil) then
-  outputString = string.gsub(outputString, "%%s", animationEvent.EffectName);
+  outputString = string_gsub(outputString, "%%s", animationEvent.EffectName);
  end
 
  -- Substitute damage types.
  if (animationEvent.DamageType ~= nil) then
-  outputString = string.gsub(outputString, "%%t", animationEvent.DamageType);
+  outputString = string_gsub(outputString, "%%t", animationEvent.DamageType);
  end
 
  -- Check if there is partial effect text and the show partial effects flag is on and append it.
@@ -1138,7 +1157,7 @@ function MikSBT.FormatTriggerText(animationEvent, triggerEvent)
 
  -- Loop through all of the captures in the trigger event.
  for i = 1, triggerEvent.NumCaptures do
-  outputString = string.gsub(outputString , "%%" .. i, triggerEvent["CapturedData" .. i]);
+  outputString = string_gsub(outputString , "%%" .. i, triggerEvent["CapturedData" .. i]);
  end
 
  -- Set the event's output text.
@@ -1203,17 +1222,17 @@ function MikSBT.UpdateProfiles()
    -- Loop through all of the event settings.
    for eventTypeName, eventType in profile.EventSettings do
     -- Check for the event types that can't be crits and remove the crit settings table.
-    if (string.find(eventTypeName, "MISS") or string.find(eventTypeName, "DODGE") or string.find(eventTypeName, "PARRY") or
-        string.find(eventTypeName, "BLOCK") or string.find(eventTypeName, "ABSORB") or string.find(eventTypeName, "IMMUNE") or
-        string.find(eventTypeName, "DOT") or string.find(eventTypeName, "RESIST") or string.find(eventTypeName, "HOT") or
-        string.find(eventTypeName, "ENVIRONMENTAL") or string.find(eventTypeName, "EVADE") or string.find(eventTypeName, "NOTIFICATION")) then
+    if (string_find(eventTypeName, "MISS") or string_find(eventTypeName, "DODGE") or string_find(eventTypeName, "PARRY") or
+        string_find(eventTypeName, "BLOCK") or string_find(eventTypeName, "ABSORB") or string_find(eventTypeName, "IMMUNE") or
+        string_find(eventTypeName, "DOT") or string_find(eventTypeName, "RESIST") or string_find(eventTypeName, "HOT") or
+        string_find(eventTypeName, "ENVIRONMENTAL") or string_find(eventTypeName, "EVADE") or string_find(eventTypeName, "NOTIFICATION")) then
 
      -- Remove the crit settings table.
      eventType.FontSettings.Crit = nil;
     end
 
     -- Check if the event type is a notification and add the IsSticky flag.
-    if (string.find(eventTypeName, "NOTIFICATION")) then
+    if (string_find(eventTypeName, "NOTIFICATION")) then
      eventType.IsSticky = MikSBT.DEFAULT_CONFIG.EventSettings[eventTypeName].IsSticky;
     end
 
@@ -1266,7 +1285,7 @@ function MikSBT.UpdateProfiles()
   if (profile.CreationVersion < 4.1) then
   
    if profile.Triggers.MSBT_TRIGGER_WINDFURY then -- Fix Windfury Trigger
-	   profile.Triggers.MSBT_TRIGGER_WINDFURY.TriggerSettings.SearchPatterns[1] = string.format(AURAADDEDSELFHELPFUL, string.gsub(BS["Windfury Totem"], "-", "%%-"))
+	   profile.Triggers.MSBT_TRIGGER_WINDFURY.TriggerSettings.SearchPatterns[1] = string.format(AURAADDEDSELFHELPFUL, string_gsub(BS["Windfury Totem"], "-", "%%-"))
    end
    
    if profile.Triggers.MSBT_TRIGGER_HAND_OF_JUSTICE then -- Delete Hand of Justice Trigger
@@ -1576,9 +1595,9 @@ function MikSBT.DispatchAnimationEvent(animationEvent)
   -- If it's an incoming or outgoing event add it to the associated scroll area's events array
   -- for potential merging.
   if (animationEvent.ScrollArea == scrollAreas.Incoming) then
-   table.insert(animationMergeData.Incoming.UnmergedEvents, animationEvent);
+   table_insert(animationMergeData.Incoming.UnmergedEvents, animationEvent);
   elseif (animationEvent.ScrollArea == scrollAreas.Outgoing) then
-   table.insert(animationMergeData.Outgoing.UnmergedEvents, animationEvent);
+   table_insert(animationMergeData.Outgoing.UnmergedEvents, animationEvent);
 
   -- Add the event the animation system.
   else
@@ -1598,11 +1617,11 @@ function MikSBT.AddAnimation(animationEvent)
  -- Loop through all of the suppression entries and look for a match.
  for _, suppressionSettings in MikSBT.CurrentProfile.Suppressions do
   -- Check if the suppression's search pattern is a match.
-  if (suppressionSettings.Enabled and (string.find(animationEvent.Text, suppressionSettings.SearchPattern))) then
+  if (suppressionSettings.Enabled and (string_find(animationEvent.Text, suppressionSettings.SearchPattern))) then
    -- Reclaim the animation event table to the events recycler and leave the function.
    eventsRecycler:ReclaimTable(animationEvent);
    return;
-  elseif (suppressionSettings.Enabled and animationEvent.EffectName and string.find(animationEvent.EffectName, suppressionSettings.SearchPattern)) then
+  elseif (suppressionSettings.Enabled and animationEvent.EffectName and string_find(animationEvent.EffectName, suppressionSettings.SearchPattern)) then
    -- Reclaim the animation event table to the events recycler and leave the function.
    eventsRecycler:ReclaimTable(animationEvent);
    return;
@@ -1624,23 +1643,23 @@ function MikSBT.AddAnimation(animationEvent)
  if unitID then
 	local _, Class = UnitClass(unitID)
 	if Class and Class == "PALADIN" then
-		animationEvent.Text = string.gsub(animationEvent.Text, animationEvent.Name, "|cffF58CBA|h"..uName.."|h|r")
+		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffF58CBA|h"..uName.."|h|r")
 	elseif Class and Class == "DRUID" then
-		animationEvent.Text = string.gsub(animationEvent.Text, animationEvent.Name, "|cffFF7D0A|h"..uName.."|h|r")
+		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffFF7D0A|h"..uName.."|h|r")
 	elseif Class and Class == "HUNTER" then
-		animationEvent.Text = string.gsub(animationEvent.Text, animationEvent.Name, "|cffABD473|h"..uName.."|h|r")
+		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffABD473|h"..uName.."|h|r")
 	elseif Class and Class == "MAGE" then
-		animationEvent.Text = string.gsub(animationEvent.Text, animationEvent.Name, "|cff69CCF0|h"..uName.."|h|r")
+		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cff69CCF0|h"..uName.."|h|r")
 	elseif Class and Class == "PRIEST" then
-		animationEvent.Text = string.gsub(animationEvent.Text, animationEvent.Name, "|cffFFFFFF|h"..uName.."|h|r")
+		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffFFFFFF|h"..uName.."|h|r")
 	elseif Class and Class == "ROGUE" then
-		animationEvent.Text = string.gsub(animationEvent.Text, animationEvent.Name, "|cffFFF569|h"..uName.."|h|r")
+		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffFFF569|h"..uName.."|h|r")
 	elseif Class and Class == "SHAMAN" then
-		animationEvent.Text = string.gsub(animationEvent.Text, animationEvent.Name, "|cff0070DE|h"..uName.."|h|r")
+		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cff0070DE|h"..uName.."|h|r")
 	elseif Class and Class == "WARLOCK" then
-		animationEvent.Text = string.gsub(animationEvent.Text, animationEvent.Name, "|cff9482C9|h"..uName.."|h|r")
+		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cff9482C9|h"..uName.."|h|r")
 	elseif Class and Class == "WARRIOR" then
-		animationEvent.Text = string.gsub(animationEvent.Text, animationEvent.Name, "|cffC79C6E|h"..uName.."|h|r")
+		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffC79C6E|h"..uName.."|h|r")
 	end
  end
 
@@ -1698,7 +1717,7 @@ function MikSBT.AddAnimation(animationEvent)
   -- play sound if enabled
   if MikSBT.CurrentProfile.ResistSound then
     if animationEvent.EffectName then
-      if (string.find(animationEvent.EffectName, "Cone of Cold") or string.find(animationEvent.EffectName, "Frost Nova")) then
+      if (string_find(animationEvent.EffectName, "Cone of Cold") or string_find(animationEvent.EffectName, "Frost Nova")) then
         PlaySoundFile("Interface\\AddOns\\MikScrollingBattleText\\sounds\\Resist.mp3");
       end
     end
@@ -1720,8 +1739,26 @@ function MikSBT.AddAnimation(animationEvent)
  -- Athene Edit - Spell Icon
  local texture
  if animationEvent.Texture then texture = animationEvent.Texture end
+
+ -- SpellId-based icon lookup (fast path, bypasses Babble-Spell and tooltip scanning).
+ if not texture and animationEvent.SpellId then
+  local sid = animationEvent.SpellId
+  if spellIdIconCache[sid] then
+   texture = spellIdIconCache[sid]
+  elseif MikCEH.hasSuperWoW and SpellInfo then
+   local ok, _, _, tex = pcall(SpellInfo, sid)
+   if ok and tex then texture = tex; spellIdIconCache[sid] = tex end
+  elseif MikCEH.hasNampower and GetSpellRecField and GetSpellIconTexture then
+   local ok, iconId = pcall(GetSpellRecField, sid, "spellIconID")
+   if ok and iconId then
+    local ok2, tex = pcall(GetSpellIconTexture, iconId)
+    if ok2 and tex then texture = tex; spellIdIconCache[sid] = tex end
+   end
+  end
+ end
+
  if animationEvent.EffectName then
-	 local name = string.gsub(animationEvent.EffectName, " %(%d+%)", "")
+	 local name = string_gsub(animationEvent.EffectName, " %(%d+%)", "")
 	 -- DEFAULT_CHAT_FRAME:AddMessage(animationEvent.EffectName)
 	 -- DEFAULT_CHAT_FRAME:AddMessage(name)
 	 -- texture = BS:GetSpellIcon(name)
@@ -2135,19 +2172,19 @@ function MikSBT.RepositionAnimDisplayInfo(scrollArea)
  for x = scrollArea.NextAnimationDisplay, scrollArea.FirstSticky-1 do
   local animDisplayInfo = scrollArea.AnimationDisplayArray[x];
   if (animDisplayInfo.IsActive) then
-   table.insert(activeNonStickies, animDisplayInfo);
+   table_insert(activeNonStickies, animDisplayInfo);
   end
  end
 
  for x = 1, scrollArea.NextAnimationDisplay-1 do
   local animDisplayInfo = scrollArea.AnimationDisplayArray[x];
   if (animDisplayInfo.IsActive) then
-   table.insert(activeNonStickies, animDisplayInfo);
+   table_insert(activeNonStickies, animDisplayInfo);
   end
  end
 
  -- Get the number of active non sticky data objects.
- local numNonStickies = table.getn(activeNonStickies);
+ local numNonStickies = table_getn(activeNonStickies);
 
  -- Animation style straight, left parabola, or right parabola.
  if (scrollArea.DisplaySettings.AnimationStyle == ANIMATION_STYLE_STRAIGHT or 
@@ -2189,7 +2226,7 @@ function MikSBT.RepositionAnimDisplayInfo(scrollArea)
 
  -- Clear the temp non stickies table.
  for x = 1, numNonStickies do
-  table.remove(activeNonStickies, 1);
+  table_remove(activeNonStickies, 1);
  end
 end
 
@@ -2202,19 +2239,19 @@ function MikSBT.RepositionStickyAnimDisplayInfo(scrollArea)
  for x = scrollArea.NextSticky, NUM_FONT_STRINGS do
   local animDisplayInfo = scrollArea.AnimationDisplayArray[x];
   if (animDisplayInfo.IsActive) then
-   table.insert(activeStickies, animDisplayInfo);
+   table_insert(activeStickies, animDisplayInfo);
   end
  end
 
  for x = scrollArea.FirstSticky, scrollArea.NextSticky-1 do
   local animDisplayInfo = scrollArea.AnimationDisplayArray[x];
   if (animDisplayInfo.IsActive) then
-   table.insert(activeStickies, animDisplayInfo);
+   table_insert(activeStickies, animDisplayInfo);
   end
  end
 
  -- Get the number of active stickies.
- local numStickies = table.getn(activeStickies);
+ local numStickies = table_getn(activeStickies);
 
 
  -- Animation style straight, left parabola, or right parabola.
@@ -2271,7 +2308,7 @@ function MikSBT.RepositionStickyAnimDisplayInfo(scrollArea)
 
  -- Clear the temp stickies table.
  for x = 1, numStickies do
-  table.remove(activeStickies, 1);
+  table_remove(activeStickies, 1);
  end
 end
 
@@ -2570,7 +2607,7 @@ function MikSBT.GetNextParameter(paramString)
  local currentParam = paramString;
 
  -- Look for a space.
- local idx = string.find(paramString, " ");
+ local idx = string_find(paramString, " ");
 
  if (idx) then
   -- Get the current and remaing parameters.
