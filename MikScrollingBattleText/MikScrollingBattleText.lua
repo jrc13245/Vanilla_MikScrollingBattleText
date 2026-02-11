@@ -138,15 +138,30 @@ local function GetDamageTypeColor(dt)
  if not damageTypeColors then
   damageTypeColors = {
    [SPELL_SCHOOL1_CAP] = "\124cffF6F99E\124h",
-   [SPELL_SCHOOL2_CAP] = "\124cffFF8080\124h",
-   [SPELL_SCHOOL3_CAP] = "\124cff80FF80\124h",
-   [SPELL_SCHOOL4_CAP] = "\124cff8080FF\124h",
-   [SPELL_SCHOOL5_CAP] = "\124cffA000A0\124h",
-   [SPELL_SCHOOL6_CAP] = "\124cffFFB9FF\124h",
-   ["Inconnu"]         = "\124cffFFB9FF\124h",
+   [SPELL_SCHOOL2_CAP] = "\124cffFF4444\124h",
+   [SPELL_SCHOOL3_CAP] = "\124cff44FF44\124h",
+   [SPELL_SCHOOL4_CAP] = "\124cff4488FF\124h",
+   [SPELL_SCHOOL5_CAP] = "\124cff6600CC\124h",
+   [SPELL_SCHOOL6_CAP] = "\124cffCC66FF\124h",
+   ["Inconnu"]         = "\124cffCC66FF\124h",
   }
  end
  return damageTypeColors[dt]
+end
+
+-- Damage type → {r, g, b} float lookup for SetTextColor (lazily initialized).
+local damageTypeFontColors
+local function GetDamageTypeFontColor(dt)
+ if not damageTypeFontColors then
+  damageTypeFontColors = {
+   [SPELL_SCHOOL2_CAP] = { r=1.0,  g=0.27, b=0.27 },  -- Fire (red)
+   [SPELL_SCHOOL3_CAP] = { r=0.27, g=1.0,  b=0.27 },  -- Nature (green)
+   [SPELL_SCHOOL4_CAP] = { r=0.27, g=0.53, b=1.0  },  -- Frost (blue)
+   [SPELL_SCHOOL5_CAP] = { r=0.4,  g=0.0,  b=0.8  },  -- Shadow (deep purple)
+   [SPELL_SCHOOL6_CAP] = { r=0.8,  g=0.4,  b=1.0  },  -- Arcane (purple/pink)
+  }
+ end
+ return damageTypeFontColors[dt]
 end
 
 -- Number of font strings.
@@ -1727,6 +1742,17 @@ function MikSBT.AddAnimation(animationEvent)
   animDisplayInfo.ColorR = animationEvent.EventSettings.FontSettings.Color.r;
   animDisplayInfo.ColorG = animationEvent.EventSettings.FontSettings.Color.g;
   animDisplayInfo.ColorB = animationEvent.EventSettings.FontSettings.Color.b;
+
+  -- Override font color based on spell school damage type (outgoing only).
+  if animationEvent.DamageType and animationEvent.EventType
+     and string_find(animationEvent.EventType, "OUTGOING") then
+   local dtColor = GetDamageTypeFontColor(animationEvent.DamageType)
+   if dtColor then
+    animDisplayInfo.ColorR = dtColor.r
+    animDisplayInfo.ColorG = dtColor.g
+    animDisplayInfo.ColorB = dtColor.b
+   end
+  end
 
  -- No event type associated with the event so get the display info from the animation event itself.
  else
