@@ -313,8 +313,9 @@ function MikCEH.OnLoad()
   MikCEH.SetupNampowerEvents();
  end
 
- -- Register for the ADDON_LOADED event.
+ -- Register for the ADDON_LOADED and PLAYER_ENTERING_WORLD events.
  MCEHEventFrame:RegisterEvent("ADDON_LOADED");
+ MCEHEventFrame:RegisterEvent("PLAYER_ENTERING_WORLD");
 end
 
 
@@ -335,6 +336,19 @@ function MikCEH.OnEvent()
 
    -- Initialize the helper object.
    MikCEH.Init();
+  end
+
+ -- Retry playerGUID initialization when the player fully enters the world.
+ elseif (event == "PLAYER_ENTERING_WORLD") then
+  this:UnregisterEvent("PLAYER_ENTERING_WORLD");
+  if not playerGUID then
+   if hasSuperWoW and UnitExists("player") then
+    local _, _, guid = pcall(UnitExists, "player")
+    if guid then playerGUID = guid end
+   elseif hasNampower and UnitGUID then
+    local ok, guid = pcall(UnitGUID, "player")
+    if ok and guid then playerGUID = guid end
+   end
   end
 
  -- Leave Combat
@@ -828,9 +842,28 @@ end
 
 
 -- **********************************************************************************
+-- Ensures playerGUID is set. Called lazily by Nampower event handlers since
+-- UnitGUID may not be available during ADDON_LOADED for some users.
+-- **********************************************************************************
+local function EnsurePlayerGUID()
+ if playerGUID then return true end
+ if hasSuperWoW and UnitExists("player") then
+  local _, _, guid = pcall(UnitExists, "player")
+  if guid then playerGUID = guid; return true end
+ end
+ if hasNampower and UnitGUID then
+  local ok, guid = pcall(UnitGUID, "player")
+  if ok and guid then playerGUID = guid; return true end
+ end
+ return false
+end
+
+
+-- **********************************************************************************
 -- Nampower event dispatcher — called by the Nampower event frame's OnEvent.
 -- **********************************************************************************
 function MikCEH.OnNampowerEvent()
+ EnsurePlayerGUID()
  local handler = nampowerHandlers[event]
  if handler then handler() end
 end
@@ -953,7 +986,6 @@ end
 -- Args: attackerGuid, targetGuid, totalDamage, hitInfo, victimState, subDamageCount, blockedAmount, totalAbsorb, totalResist
 -- **********************************************************************************
 nampowerHandlers["AUTO_ATTACK_SELF"] = function()
- nampowerAutoAttackActive = true
  local casterGuid, targetGuid = arg1, arg2
  local damage = arg3
  local hitInfo = arg4
@@ -971,6 +1003,9 @@ nampowerHandlers["AUTO_ATTACK_SELF"] = function()
  else
   return
  end
+
+ -- Only disable CHAT_MSG fallback after we've confirmed playerGUID works.
+ nampowerAutoAttackActive = true
 
  local targetName = GetNameFromGUID(targetGuid)
  local actionType = nampowerVictimStateToAction[victimState] or MikCEH.ACTIONTYPE_HIT
@@ -1024,7 +1059,6 @@ end
 -- Args: attackerGuid, targetGuid, totalDamage, hitInfo, victimState, subDamageCount, blockedAmount, totalAbsorb, totalResist
 -- **********************************************************************************
 nampowerHandlers["AUTO_ATTACK_OTHER"] = function()
- nampowerAutoAttackActive = true
  local casterGuid, targetGuid = arg1, arg2
  local damage = arg3
  local hitInfo = arg4
@@ -1042,6 +1076,9 @@ nampowerHandlers["AUTO_ATTACK_OTHER"] = function()
  else
   return
  end
+
+ -- Only disable CHAT_MSG fallback after we've confirmed playerGUID works.
+ nampowerAutoAttackActive = true
 
  local casterName = GetNameFromGUID(casterGuid)
  local actionType = nampowerVictimStateToAction[victimState] or MikCEH.ACTIONTYPE_HIT
@@ -1091,7 +1128,6 @@ end
 -- Args: targetGuid, casterGuid, spellId, amount, critical, periodic
 -- **********************************************************************************
 nampowerHandlers["SPELL_HEAL_ON_SELF"] = function()
- nampowerHealsActive = true
  local targetGuid, casterGuid = arg1, arg2
  local spellId = arg3
  local healAmount = arg4
@@ -1100,6 +1136,9 @@ nampowerHandlers["SPELL_HEAL_ON_SELF"] = function()
 
  -- Only for player.
  if not IsPlayerGUID(targetGuid) then return end
+
+ -- Only disable CHAT_MSG fallback after we've confirmed playerGUID works.
+ nampowerHealsActive = true
 
  local spellName = GetSpellNameFromId(spellId)
  local casterName = GetNameFromGUID(casterGuid)
@@ -1129,7 +1168,6 @@ end
 -- Args: targetGuid, casterGuid, spellId, amount, critical, periodic
 -- **********************************************************************************
 nampowerHandlers["SPELL_HEAL_BY_SELF"] = function()
- nampowerHealsActive = true
  local targetGuid, casterGuid = arg1, arg2
  local spellId = arg3
  local healAmount = arg4
@@ -1137,7 +1175,13 @@ nampowerHandlers["SPELL_HEAL_BY_SELF"] = function()
  local isHot = arg6
 
  -- Skip self-heals (handled by SPELL_HEAL_ON_SELF).
+ -- When playerGUID is nil, we can't identify self-heals, so bail out
+ -- and let the CHAT_MSG fallback handle it.
+ if not playerGUID then return end
  if IsPlayerGUID(targetGuid) then return end
+
+ -- Only disable CHAT_MSG fallback after we've confirmed playerGUID works.
+ nampowerHealsActive = true
 
  local spellName = GetSpellNameFromId(spellId)
  local targetName = GetNameFromGUID(targetGuid)
@@ -1166,13 +1210,15 @@ end
 -- Args: targetGuid, casterGuid, spellId, powerType, amount, periodic
 -- **********************************************************************************
 nampowerHandlers["SPELL_ENERGIZE_ON_SELF"] = function()
- nampowerEnergizeActive = true
  local spellId = arg3
  local powerType = arg4
  local amount = arg5
 
  local powerTypeStr = nampowerPowerTypeToString[powerType]
  if not powerTypeStr then return end
+
+ -- Only disable CHAT_MSG fallback after we've confirmed this handler works.
+ nampowerEnergizeActive = true
 
  local spellName = GetSpellNameFromId(spellId)
 

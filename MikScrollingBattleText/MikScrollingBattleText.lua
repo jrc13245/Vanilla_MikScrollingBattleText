@@ -1328,12 +1328,43 @@ function MikSBT.UpdateProfiles()
   end
   
   if (profile.CreationVersion < 4.4) then
-  
+
 	 profile.BlizzardFontSettings = MikSBT.CopyTable(MikSBT.DEFAULT_CONFIG.BlizzardFontSettings);
-	 
+
   profile.CreationVersion = 4.4;
   end
-  
+
+  if (profile.CreationVersion < 4.5) then
+
+   -- Add missing outgoing pet event settings (omitted from the 4.3 migration).
+   local petOutgoingEvents = {
+    "MSBT_EVENTTYPE_OUTGOING_PET_DAMAGE",
+    "MSBT_EVENTTYPE_OUTGOING_PET_MISS",
+    "MSBT_EVENTTYPE_OUTGOING_PET_DODGE",
+    "MSBT_EVENTTYPE_OUTGOING_PET_PARRY",
+    "MSBT_EVENTTYPE_OUTGOING_PET_BLOCK",
+    "MSBT_EVENTTYPE_OUTGOING_PET_ABSORB",
+    "MSBT_EVENTTYPE_OUTGOING_PET_IMMUNE",
+    "MSBT_EVENTTYPE_OUTGOING_PET_EVADE",
+    "MSBT_EVENTTYPE_OUTGOING_PET_SPELL_DAMAGE",
+    "MSBT_EVENTTYPE_OUTGOING_PET_SPELL_MISS",
+    "MSBT_EVENTTYPE_OUTGOING_PET_SPELL_DODGE",
+    "MSBT_EVENTTYPE_OUTGOING_PET_SPELL_PARRY",
+    "MSBT_EVENTTYPE_OUTGOING_PET_SPELL_BLOCK",
+    "MSBT_EVENTTYPE_OUTGOING_PET_SPELL_RESIST",
+    "MSBT_EVENTTYPE_OUTGOING_PET_SPELL_ABSORB",
+    "MSBT_EVENTTYPE_OUTGOING_PET_SPELL_IMMUNE",
+    "MSBT_EVENTTYPE_OUTGOING_PET_SPELL_EVADE",
+   };
+   for _, evtName in petOutgoingEvents do
+    if not profile.EventSettings[evtName] and MikSBT.DEFAULT_CONFIG.EventSettings[evtName] then
+     profile.EventSettings[evtName] = MikSBT.CopyTable(MikSBT.DEFAULT_CONFIG.EventSettings[evtName]);
+    end
+   end
+
+   profile.CreationVersion = 4.5;
+  end
+
  end
 end
 
