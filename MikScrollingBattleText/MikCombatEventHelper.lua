@@ -190,6 +190,36 @@ local nampowerHandlers = {}
 -- Spell name cache for spellId lookups.
 local spellNameCache = {}
 
+-- Name→unitID cache for avoiding O(n) raid/party iteration.
+local nameToUnitIDCache = {}
+local nameToUnitIDCacheDirty = true
+
+local function RebuildNameToUnitIDCache()
+ nameToUnitIDCache = {}
+ local numRaid = GetNumRaidMembers()
+ if numRaid > 0 then
+  for i = 1, numRaid do
+   local ruid = "raid" .. i
+   local rname = UnitName(ruid)
+   if rname then nameToUnitIDCache[rname] = ruid end
+   local rpuid = "raidpet" .. i
+   local rpname = UnitName(rpuid)
+   if rpname then nameToUnitIDCache[rpname] = rpuid end
+  end
+ else
+  local numParty = GetNumPartyMembers()
+  for i = 1, numParty do
+   local puid = "party" .. i
+   local pname = UnitName(puid)
+   if pname then nameToUnitIDCache[pname] = puid end
+   local ppuid = "partypet" .. i
+   local ppname = UnitName(ppuid)
+   if ppname then nameToUnitIDCache[ppname] = ppuid end
+  end
+ end
+ nameToUnitIDCacheDirty = false
+end
+
 
 -------------------------------------------------------------------------------------
 -- Core event handlers.
@@ -268,6 +298,8 @@ function MikCEH.OnLoad()
  table_insert(listenEvents, "UNIT_MANA");							-- Mana changes.
 
  table_insert(listenEvents, "PLAYER_TARGET_CHANGED");					-- Target changes.
+ table_insert(listenEvents, "RAID_ROSTER_UPDATE");					-- Roster cache invalidation.
+ table_insert(listenEvents, "PARTY_MEMBERS_CHANGED");					-- Roster cache invalidation.
 
  -- If Nampower is available, set up Nampower events and filter redundant CHAT_MSG events.
  if (GetNampowerVersion ~= nil) then
@@ -352,14 +384,18 @@ function MikCEH.OnEvent()
    end
   end
 
+ -- Roster changes — invalidate name→unitID cache.
+ elseif (event == "RAID_ROSTER_UPDATE" or event == "PARTY_MEMBERS_CHANGED") then
+  nameToUnitIDCacheDirty = true
+
  -- Target changes
  elseif (event == "PLAYER_TARGET_CHANGED") then
   -- Make sure a unit is selected, is a player and is hostile.
   if (UnitExists("target") and UnitIsPlayer("target") and not UnitIsFriend("player", "target")) then
    -- Get the unit's name and make sure it's valid before adding it to the recently selected player's list.
-   local playerName = UnitName("target");
-   if (playerName) then
-    recentlySelectedPlayers[playerName] = 0;
+   local targetName = UnitName("target");
+   if (targetName) then
+    recentlySelectedPlayers[targetName] = 0;
    end
   end
 
@@ -442,18 +478,20 @@ combatEventDispatch["CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF"] = handleIncomingSpel
 combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_SELF_DAMAGE"] = function(msg)
  if not hasNampower then
   MikCEH.ParseForIncomingDebuffs(msg)
+  MikCEH.ParseForPowerGains(msg)
  end
- MikCEH.ParseForPowerGains(msg)
 end
 
 -- Incoming Buffs, HoTs, Power Gains
 combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS"] = function(msg)
- if hasNampower then
-  MikCEH.ParseForPowerGains(msg)
- elseif not MikCEH.ParseForIncomingSpellHeals(msg) then
-  MikCEH.ParseForIncomingBuffs(msg)
-  MikCEH.ParseForOutgoingHoTs(msg)
+ if not hasNampower then
+  if not MikCEH.ParseForIncomingSpellHeals(msg) then
+   MikCEH.ParseForIncomingBuffs(msg)
+   MikCEH.ParseForOutgoingHoTs(msg)
+  end
  end
+ -- When hasNampower: SPELL_ENERGIZE_ON_SELF handles power gains;
+ -- event still fires for trigger pattern matching.
 end
 
 -- Outgoing Melee Hits/Crits, Environmental Damage
@@ -579,6 +617,18 @@ function MikCEH.Init()
  MikCEH.hasSuperWoW = hasSuperWoW
  MikCEH.hasUnitXP = hasUnitXP
 
+ -- Check Nampower version — v2.33.0+ required for correct event support.
+ if not hasNampower then
+  MikSBT.Print("Nampower not detected. Please install Nampower v2.33.0+ for full combat text support.", 1, 0.5, 0)
+ else
+  local ok, major, minor, patch = pcall(GetNampowerVersion)
+  if ok and major and minor then
+   if major < 2 or (major == 2 and minor < 33) then
+    MikSBT.Print("Nampower v" .. major .. "." .. minor .. "." .. (patch or 0) .. " detected. Please update to v2.33.0+ for full combat text support.", 1, 0.5, 0)
+   end
+  end
+ end
+
  -- Cache the player GUID when SuperWoW or Nampower is available.
  if hasSuperWoW and UnitExists("player") then
   local _, _, guid = pcall(UnitExists, "player")
@@ -605,33 +655,37 @@ local nampowerSchoolToType = {
  [32] = MikCEH.DAMAGETYPE_ARCANE,    -- Arcane
 }
 
--- Nampower missInfo to MikCEH action type mapping.
+-- Nampower SpellMissInfo to MikCEH action type mapping.
 local nampowerMissToAction = {
- [0]  = MikCEH.ACTIONTYPE_MISS,
- [1]  = MikCEH.ACTIONTYPE_DODGE,
- [2]  = MikCEH.ACTIONTYPE_PARRY,
- [3]  = MikCEH.ACTIONTYPE_BLOCK,
- [4]  = MikCEH.ACTIONTYPE_RESIST,
- [5]  = MikCEH.ACTIONTYPE_ABSORB,
- [6]  = MikCEH.ACTIONTYPE_IMMUNE,
- [7]  = MikCEH.ACTIONTYPE_EVADE,
- [8]  = MikCEH.ACTIONTYPE_REFLECT,
+ -- [0] = SPELL_MISS_NONE (should not appear)
+ [1]  = MikCEH.ACTIONTYPE_MISS,     -- SPELL_MISS_MISS
+ [2]  = MikCEH.ACTIONTYPE_RESIST,   -- SPELL_MISS_RESIST
+ [3]  = MikCEH.ACTIONTYPE_DODGE,    -- SPELL_MISS_DODGE
+ [4]  = MikCEH.ACTIONTYPE_PARRY,    -- SPELL_MISS_PARRY
+ [5]  = MikCEH.ACTIONTYPE_BLOCK,    -- SPELL_MISS_BLOCK
+ [6]  = MikCEH.ACTIONTYPE_EVADE,    -- SPELL_MISS_EVADE
+ [7]  = MikCEH.ACTIONTYPE_IMMUNE,   -- SPELL_MISS_IMMUNE
+ [8]  = MikCEH.ACTIONTYPE_IMMUNE,   -- SPELL_MISS_IMMUNE2
+ -- [9] = SPELL_MISS_DEFLECT (no equivalent)
+ [10] = MikCEH.ACTIONTYPE_ABSORB,   -- SPELL_MISS_ABSORB
+ [11] = MikCEH.ACTIONTYPE_REFLECT,  -- SPELL_MISS_REFLECT
 }
 
 -- Nampower victimState to MikCEH action type mapping (for auto attacks).
 local nampowerVictimStateToAction = {
- [0] = MikCEH.ACTIONTYPE_HIT,     -- Normal hit
- [1] = MikCEH.ACTIONTYPE_DODGE,
- [2] = MikCEH.ACTIONTYPE_PARRY,
- [3] = MikCEH.ACTIONTYPE_HIT,     -- Interrupt (treat as hit)
- [4] = MikCEH.ACTIONTYPE_BLOCK,   -- Full block
- [5] = MikCEH.ACTIONTYPE_EVADE,
- [6] = MikCEH.ACTIONTYPE_IMMUNE,
- [7] = MikCEH.ACTIONTYPE_HIT,     -- Deflect (treat as hit)
- [8] = MikCEH.ACTIONTYPE_ABSORB,  -- Full absorb
+ [0] = MikCEH.ACTIONTYPE_MISS,    -- VICTIMSTATE_UNAFFECTED (seen with HITINFO_MISS)
+ [1] = MikCEH.ACTIONTYPE_HIT,     -- VICTIMSTATE_NORMAL
+ [2] = MikCEH.ACTIONTYPE_DODGE,   -- VICTIMSTATE_DODGE
+ [3] = MikCEH.ACTIONTYPE_PARRY,   -- VICTIMSTATE_PARRY
+ [4] = MikCEH.ACTIONTYPE_HIT,     -- VICTIMSTATE_INTERRUPT (treat as hit)
+ [5] = MikCEH.ACTIONTYPE_BLOCK,   -- VICTIMSTATE_BLOCKS
+ [6] = MikCEH.ACTIONTYPE_EVADE,   -- VICTIMSTATE_EVADES
+ [7] = MikCEH.ACTIONTYPE_IMMUNE,  -- VICTIMSTATE_IS_IMMUNE
+ [8] = MikCEH.ACTIONTYPE_HIT,     -- VICTIMSTATE_DEFLECTS (treat as hit)
 }
 
 -- HitInfo bitmask constants.
+local HITINFO_MISS        = 16
 local HITINFO_CRITICALHIT = 128
 local HITINFO_GLANCING    = 16384
 local HITINFO_CRUSHING    = 32768
@@ -723,16 +777,10 @@ end
 local function ParseNampowerMitigation(mitigationStr, eventData)
  if not mitigationStr or mitigationStr == "" then return end
  -- Format: "absorbAmount,blockAmount,resistAmount"
- local absorb, block, resist
- local i = 1
- for val in string_gfind(mitigationStr, "([^,]+)") do
-  local num = tonumber(val)
-  if i == 1 then absorb = num
-  elseif i == 2 then block = num
-  elseif i == 3 then resist = num
-  end
-  i = i + 1
- end
+ local _, _, a, b, r = string_find(mitigationStr, "^([^,]*),([^,]*),([^,]*)$")
+ local absorb = tonumber(a)
+ local block = tonumber(b)
+ local resist = tonumber(r)
 
  -- Set the first non-zero mitigation as the partial action.
  if absorb and absorb > 0 then
@@ -763,15 +811,16 @@ end
 
 -- **********************************************************************************
 -- SPELL_DAMAGE_EVENT_SELF: Outgoing spell damage (player and pet).
--- Args: casterGuid, targetGuid, spellId, spellSchool, damage, isCrit, effectAuraStr, mitigationStr
+-- Args: targetGuid, casterGuid, spellId, amount, mitigationStr, hitInfo, spellSchool, effectAuraStr
 -- **********************************************************************************
 nampowerHandlers["SPELL_DAMAGE_EVENT_SELF"] = function()
- local casterGuid, targetGuid = arg1, arg2
- local spellId, spellSchool = arg3, arg4
- local damage = arg5
- local isCrit = arg6
- local effectAuraStr = arg7
- local mitigationStr = arg8
+ local targetGuid, casterGuid = arg1, arg2
+ local spellId = arg3
+ local damage = arg4
+ local mitigationStr = arg5
+ local hitInfo = arg6
+ local spellSchool = arg7
+ local effectAuraStr = arg8
 
  -- Determine direction: player outgoing, or pet outgoing.
  local directionType
@@ -788,16 +837,18 @@ nampowerHandlers["SPELL_DAMAGE_EVENT_SELF"] = function()
  local targetName = GetNameFromGUID(targetGuid)
 
  -- Check if this is a DoT (periodic aura effect).
+ -- effectAuraStr format: "effect1,effect2,effect3,auraType"
  local isDoT = false
  if effectAuraStr then
-  local auraType = tonumber(effectAuraStr)
+  local _, _, auraTypeStr = string_find(effectAuraStr, "%d+,%d+,%d+,(%d+)")
+  local auraType = tonumber(auraTypeStr)
   if auraType == 3 or auraType == 89 then isDoT = true end
  end
 
  local hitType
  if isDoT then
   hitType = MikCEH.HITTYPE_OVER_TIME
- elseif isCrit and isCrit ~= 0 then
+ elseif hitInfo and hitInfo ~= 0 then
   hitType = MikCEH.HITTYPE_CRIT
  else
   hitType = MikCEH.HITTYPE_NORMAL
@@ -815,15 +866,16 @@ end
 
 -- **********************************************************************************
 -- SPELL_DAMAGE_EVENT_OTHER: Incoming spell damage (to player or pet).
--- Args: casterGuid, targetGuid, spellId, spellSchool, damage, isCrit, effectAuraStr, mitigationStr
+-- Args: targetGuid, casterGuid, spellId, amount, mitigationStr, hitInfo, spellSchool, effectAuraStr
 -- **********************************************************************************
 nampowerHandlers["SPELL_DAMAGE_EVENT_OTHER"] = function()
- local casterGuid, targetGuid = arg1, arg2
- local spellId, spellSchool = arg3, arg4
- local damage = arg5
- local isCrit = arg6
- local effectAuraStr = arg7
- local mitigationStr = arg8
+ local targetGuid, casterGuid = arg1, arg2
+ local spellId = arg3
+ local damage = arg4
+ local mitigationStr = arg5
+ local hitInfo = arg6
+ local spellSchool = arg7
+ local effectAuraStr = arg8
 
  -- Only process if target is player or pet.
  local directionType
@@ -839,16 +891,18 @@ nampowerHandlers["SPELL_DAMAGE_EVENT_OTHER"] = function()
  local damageType = SchoolToDamageType(spellSchool)
  local casterName = GetNameFromGUID(casterGuid)
 
+ -- effectAuraStr format: "effect1,effect2,effect3,auraType"
  local isDoT = false
  if effectAuraStr then
-  local auraType = tonumber(effectAuraStr)
+  local _, _, auraTypeStr = string_find(effectAuraStr, "%d+,%d+,%d+,(%d+)")
+  local auraType = tonumber(auraTypeStr)
   if auraType == 3 or auraType == 89 then isDoT = true end
  end
 
  local hitType
  if isDoT then
   hitType = MikCEH.HITTYPE_OVER_TIME
- elseif isCrit and isCrit ~= 0 then
+ elseif hitInfo and hitInfo ~= 0 then
   hitType = MikCEH.HITTYPE_CRIT
  else
   hitType = MikCEH.HITTYPE_NORMAL
@@ -865,16 +919,17 @@ end
 
 -- **********************************************************************************
 -- AUTO_ATTACK_SELF: Outgoing melee auto-attacks.
--- Args: casterGuid, targetGuid, damage, victimState, hitInfo, absorbedDamage, blockedDamage, resistedDamage
+-- Args: attackerGuid, targetGuid, totalDamage, hitInfo, victimState, subDamageCount, blockedAmount, totalAbsorb, totalResist
 -- **********************************************************************************
 nampowerHandlers["AUTO_ATTACK_SELF"] = function()
  local casterGuid, targetGuid = arg1, arg2
  local damage = arg3
- local victimState = arg4
- local hitInfo = arg5
- local absorbedDmg = arg6 or 0
+ local hitInfo = arg4
+ local victimState = arg5
+ -- arg6 = subDamageCount (not needed)
  local blockedDmg = arg7 or 0
- local resistedDmg = arg8 or 0
+ local absorbedDmg = arg8 or 0
+ local resistedDmg = arg9 or 0
 
  local directionType
  if IsPlayerGUID(casterGuid) then
@@ -934,16 +989,17 @@ end
 
 -- **********************************************************************************
 -- AUTO_ATTACK_OTHER: Incoming melee auto-attacks (to player or pet).
--- Args: casterGuid, targetGuid, damage, victimState, hitInfo, absorbedDamage, blockedDamage, resistedDamage
+-- Args: attackerGuid, targetGuid, totalDamage, hitInfo, victimState, subDamageCount, blockedAmount, totalAbsorb, totalResist
 -- **********************************************************************************
 nampowerHandlers["AUTO_ATTACK_OTHER"] = function()
  local casterGuid, targetGuid = arg1, arg2
  local damage = arg3
- local victimState = arg4
- local hitInfo = arg5
- local absorbedDmg = arg6 or 0
+ local hitInfo = arg4
+ local victimState = arg5
+ -- arg6 = subDamageCount (not needed)
  local blockedDmg = arg7 or 0
- local resistedDmg = arg8 or 0
+ local absorbedDmg = arg8 or 0
+ local resistedDmg = arg9 or 0
 
  local directionType
  if IsPlayerGUID(targetGuid) then
@@ -999,10 +1055,10 @@ end
 
 -- **********************************************************************************
 -- SPELL_HEAL_ON_SELF: Incoming heals (heals landing on the player).
--- Args: casterGuid, targetGuid, spellId, healAmount, isCrit, isHot
+-- Args: targetGuid, casterGuid, spellId, amount, critical, periodic
 -- **********************************************************************************
 nampowerHandlers["SPELL_HEAL_ON_SELF"] = function()
- local casterGuid, targetGuid = arg1, arg2
+ local targetGuid, casterGuid = arg1, arg2
  local spellId = arg3
  local healAmount = arg4
  local isCrit = arg5
@@ -1036,10 +1092,10 @@ end
 
 -- **********************************************************************************
 -- SPELL_HEAL_BY_SELF: Outgoing heals (heals cast by the player).
--- Args: casterGuid, targetGuid, spellId, healAmount, isCrit, isHot
+-- Args: targetGuid, casterGuid, spellId, amount, critical, periodic
 -- **********************************************************************************
 nampowerHandlers["SPELL_HEAL_BY_SELF"] = function()
- local casterGuid, targetGuid = arg1, arg2
+ local targetGuid, casterGuid = arg1, arg2
  local spellId = arg3
  local healAmount = arg4
  local isCrit = arg5
@@ -1072,12 +1128,12 @@ end
 
 -- **********************************************************************************
 -- SPELL_ENERGIZE_ON_SELF: Power gains on the player (mana, rage, energy).
--- Args: casterGuid, targetGuid, spellId, amount, powerType
+-- Args: targetGuid, casterGuid, spellId, powerType, amount, periodic
 -- **********************************************************************************
 nampowerHandlers["SPELL_ENERGIZE_ON_SELF"] = function()
  local spellId = arg3
- local amount = arg4
- local powerType = arg5
+ local powerType = arg4
+ local amount = arg5
 
  local powerTypeStr = nampowerPowerTypeToString[powerType]
  if not powerTypeStr then return end
@@ -1145,11 +1201,11 @@ end
 
 -- **********************************************************************************
 -- BUFF_ADDED_SELF: Buff gained by the player.
--- Args: unitGuid, spellId, auraType, duration, charges
+-- Args: guid, luaSlot, spellId, stackCount, auraLevel, auraSlot, state
 -- **********************************************************************************
 nampowerHandlers["BUFF_ADDED_SELF"] = function()
  local unitGuid = arg1
- local spellId = arg2
+ local spellId = arg3
 
  -- Only for player.
  if not IsPlayerGUID(unitGuid) then return end
@@ -1166,11 +1222,11 @@ end
 
 -- **********************************************************************************
 -- DEBUFF_ADDED_SELF: Debuff gained by the player.
--- Args: unitGuid, spellId, auraType, duration, charges
+-- Args: guid, luaSlot, spellId, stackCount, auraLevel, auraSlot, state
 -- **********************************************************************************
 nampowerHandlers["DEBUFF_ADDED_SELF"] = function()
  local unitGuid = arg1
- local spellId = arg2
+ local spellId = arg3
 
  -- Only for player.
  if not IsPlayerGUID(unitGuid) then return end
@@ -1187,11 +1243,32 @@ end
 
 -- **********************************************************************************
 -- BUFF_REMOVED_SELF: Buff faded from the player.
--- Args: unitGuid, spellId
+-- Args: guid, luaSlot, spellId, stackCount, auraLevel, auraSlot, state
 -- **********************************************************************************
 nampowerHandlers["BUFF_REMOVED_SELF"] = function()
  local unitGuid = arg1
- local spellId = arg2
+ local spellId = arg3
+
+ -- Only for player.
+ if not IsPlayerGUID(unitGuid) then return end
+
+ local spellName = GetSpellNameFromId(spellId)
+ if not spellName then return end
+
+ local eventData = MikCEH.GetNotificationEventData(MikCEH.NOTIFICATIONTYPE_BUFF_FADE, nil, spellName)
+ eventData.SpellId = spellId
+
+ MikCEH.SendEvent(eventData)
+end
+
+
+-- **********************************************************************************
+-- DEBUFF_REMOVED_SELF: Debuff faded from the player.
+-- Args: guid, luaSlot, spellId, stackCount, auraLevel, auraSlot, state
+-- **********************************************************************************
+nampowerHandlers["DEBUFF_REMOVED_SELF"] = function()
+ local unitGuid = arg1
+ local spellId = arg3
 
  -- Only for player.
  if not IsPlayerGUID(unitGuid) then return end
@@ -1215,6 +1292,14 @@ end
 -- Called from OnLoad when Nampower is detected.
 -- **********************************************************************************
 function MikCEH.SetupNampowerEvents()
+ -- Enable Nampower CVars required for the events we depend on.
+ -- These are disabled by default but we suppress CHAT_MSG events they replace.
+ if SetCVar then
+  SetCVar("NP_EnableAutoAttackEvents", "1")
+  SetCVar("NP_EnableSpellHealEvents", "1")
+  SetCVar("NP_EnableSpellEnergizeEvents", "1")
+ end
+
  -- Events that Nampower covers — these will be removed from listenEvents.
  local nampowerCoveredEvents = {
   -- Incoming melee hits/misses (covered by AUTO_ATTACK_OTHER)
@@ -2275,7 +2360,6 @@ function MikCEH.ParseForIncomingDebuffs(combatMessage)
   return true;
  end
  
-	capturedData = nil
  -- Look for damage from a debuff.
  if (GetLocale() == "frFR") then
 	capturedData = MikCEH.GetCapturedData(combatMessage, "PERIODICAURADAMAGEOTHERSELF", {"%t", "%a", "%s", "%n"}); 
@@ -2286,12 +2370,7 @@ end
  -- If a match was found.
  if (capturedData ~= nil) then
 	
-	local eventData
-	if (GetLocale() == "frFR") then
-		eventData = MikCEH.GetDamageEventData(MikCEH.DIRECTIONTYPE_PLAYER_INCOMING, MikCEH.ACTIONTYPE_HIT, MikCEH.HITTYPE_OVER_TIME, capturedData.DamageType, capturedData.Amount, capturedData.SpellName, capturedData.Name);
-	else
-		eventData = MikCEH.GetDamageEventData(MikCEH.DIRECTIONTYPE_PLAYER_INCOMING, MikCEH.ACTIONTYPE_HIT, MikCEH.HITTYPE_OVER_TIME, capturedData.DamageType, capturedData.Amount, capturedData.SpellName, capturedData.Name);
-	end
+	local eventData = MikCEH.GetDamageEventData(MikCEH.DIRECTIONTYPE_PLAYER_INCOMING, MikCEH.ACTIONTYPE_HIT, MikCEH.HITTYPE_OVER_TIME, capturedData.DamageType, capturedData.Amount, capturedData.SpellName, capturedData.Name);
 
   -- Look for any partial actions and populate them into the event data.
   MikCEH.ParseForPartialActions(combatMessage, eventData);
@@ -4417,43 +4496,10 @@ function MikCEH.GetUnitIDFromName(uName)
  elseif (uName == UnitName("pet")) then
  unitID = "pet";
  
- -- Check if the name is one of the player's raid or party members.
+ -- Check if the name is one of the player's raid or party members (cached).
  else
-  -- Loop through all of the raid members.
-  local numRaidMembers = GetNumRaidMembers();
-  for i = 1, numRaidMembers do
-   if (uName == UnitName("raid" .. i)) then
-    unitID = "raid" .. i;
-   end
-  end
-  
-  for i = 1, numRaidMembers do
-   if (uName == UnitName("raidpet" .. i)) then
-    unitID = "raidpet" .. i;
-   end
-  end
-
-  -- Check if the unit ID was not already found.
-  if (not unitID) then
-   -- Loop through all of the party members.
-   local numPartyMembers = GetNumPartyMembers();
-   for i = 1, numPartyMembers do
-    if (uName == UnitName("party" .. i)) then
-     unitID = "party" .. i;
-    end
-   end
-  end
-  
-  if (not unitID) then
-   -- Loop through all of the party members.
-   local numPartyMembers = GetNumPartyMembers();
-   for i = 1, numPartyMembers do
-    if (uName == UnitName("partypet" .. i)) then
-     unitID = "partypet" .. i;
-    end
-   end
-  end
-
+  if nameToUnitIDCacheDirty then RebuildNameToUnitIDCache() end
+  unitID = nameToUnitIDCache[uName]
  end
  if unitID then
   unitName = UnitName(unitID)
@@ -4733,7 +4779,9 @@ end
 -- **********************************************************************************
 function MikCEH.ParsePetHealthTriggers()
  local healthAmount = UnitHealth("pet");
- local healthPercentage = healthAmount / UnitHealthMax("pet");
+ local maxHealth = UnitHealthMax("pet");
+ if (not maxHealth or maxHealth == 0) then return end
+ local healthPercentage = healthAmount / maxHealth;
 
  -- Loop through pet health triggers.
  for triggerKey, triggerSettings in petHealthTriggers do
@@ -4755,7 +4803,9 @@ end
 -- **********************************************************************************
 function MikCEH.ParseEnemyHealthTriggers()
  local healthAmount = UnitHealth("target");
- local healthPercentage = healthAmount / UnitHealthMax("target");
+ local maxHealth = UnitHealthMax("target");
+ if (not maxHealth or maxHealth == 0) then return end
+ local healthPercentage = healthAmount / maxHealth;
 
  -- Loop through self health triggers.
  for triggerKey, triggerSettings in enemyHealthTriggers do
@@ -4777,7 +4827,9 @@ end
 -- **********************************************************************************
 function MikCEH.ParseFriendlyHealthTriggers()
  local healthAmount = UnitHealth("target");
- local healthPercentage = healthAmount / UnitHealthMax("target");
+ local maxHealth = UnitHealthMax("target");
+ if (not maxHealth or maxHealth == 0) then return end
+ local healthPercentage = healthAmount / maxHealth;
 
  -- Loop through self health triggers.
  for triggerKey, triggerSettings in friendlyHealthTriggers do

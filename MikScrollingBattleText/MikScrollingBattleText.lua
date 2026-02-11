@@ -132,6 +132,23 @@ local spellIdIconCache = {}
 -- Babble-Spell pour les icones des spells de classe
 local BS = AceLibrary("Babble-Spell-2.2")
 
+-- Damage type → color prefix lookup (lazily initialized after globals are available).
+local damageTypeColors
+local function GetDamageTypeColor(dt)
+ if not damageTypeColors then
+  damageTypeColors = {
+   [SPELL_SCHOOL1_CAP] = "\124cffF6F99E\124h",
+   [SPELL_SCHOOL2_CAP] = "\124cffFF8080\124h",
+   [SPELL_SCHOOL3_CAP] = "\124cff80FF80\124h",
+   [SPELL_SCHOOL4_CAP] = "\124cff8080FF\124h",
+   [SPELL_SCHOOL5_CAP] = "\124cffA000A0\124h",
+   [SPELL_SCHOOL6_CAP] = "\124cffFFB9FF\124h",
+   ["Inconnu"]         = "\124cffFFB9FF\124h",
+  }
+ end
+ return damageTypeColors[dt]
+end
+
 -- Number of font strings.
 local NUM_FONT_STRINGS = 20;
 
@@ -1078,22 +1095,10 @@ function MikSBT.FormatEventText(animationEvent)
 
 	outputString = string_gsub(outputString, "-%%a", "\124cffff0000\124h-\124h\124r%%a");
 	
-	if (animationEvent.DamageType ~= nil) then
-		if animationEvent.DamageType == SPELL_SCHOOL1_CAP then
-			outputString = string_gsub(outputString, "%%a", "\124cffF6F99E\124h%%a\124h\124r");
-		elseif animationEvent.DamageType == SPELL_SCHOOL2_CAP then
-			outputString = string_gsub(outputString, "%%a", "\124cffFF8080\124h%%a\124h\124r");
-		elseif animationEvent.DamageType == SPELL_SCHOOL3_CAP then
-			outputString = string_gsub(outputString, "%%a", "\124cff80FF80\124h%%a\124h\124r");
-		elseif animationEvent.DamageType == SPELL_SCHOOL4_CAP then
-			outputString = string_gsub(outputString, "%%a", "\124cff8080FF\124h%%a\124h\124r");
-		elseif animationEvent.DamageType == SPELL_SCHOOL5_CAP then
-			outputString = string_gsub(outputString, "%%a", "\124cffA000A0\124h%%a\124h\124r");
-		elseif animationEvent.DamageType == SPELL_SCHOOL6_CAP then
-			outputString = string_gsub(outputString, "%%a", "\124cffFFB9FF\124h%%a\124h\124r");
-		elseif animationEvent.DamageType == "Inconnu" then
-			outputString = string_gsub(outputString, "%%a", "\124cffFFB9FF\124h%%a\124h\124r");
-			-- DEFAULT_CHAT_FRAME:AddMessage(animationEvent.DamageType)
+	if animationEvent.DamageType then
+		local color = GetDamageTypeColor(animationEvent.DamageType)
+		if color then
+			outputString = string_gsub(outputString, "%%a", color .. "%%a\124h\124r")
 		end
 	end
  
@@ -1109,7 +1114,9 @@ function MikSBT.FormatEventText(animationEvent)
  end
 
  -- Substitute enemy/player names.
- local unitID, unitName =  MikCEH.GetUnitIDFromName(animationEvent.Name)
+ local unitID, unitName = MikCEH.GetUnitIDFromName(animationEvent.Name)
+ animationEvent._unitID = unitID
+ animationEvent._unitName = unitName
  if unitName and unitID and not UnitIsUnit(unitID, "player") then
   outputString = string_gsub(outputString, "%%n", unitName);
  else
@@ -1638,8 +1645,9 @@ function MikSBT.AddAnimation(animationEvent)
   animationEvent.IsSticky = true;
  end
 
- -- Color UnitName by class
- local unitID, uName = MikCEH.GetUnitIDFromName(animationEvent.Name)
+ -- Color UnitName by class (reuse cached lookup from FormatEventText)
+ local unitID = animationEvent._unitID
+ local uName = animationEvent._unitName
  if unitID then
 	local _, Class = UnitClass(unitID)
 	if Class and Class == "PALADIN" then
@@ -1779,7 +1787,16 @@ function MikSBT.AddAnimation(animationEvent)
 			texture = nil
 			NO_ICON_CACHE[strlower(name)] = 1
 		end
-	 elseif not texture and BS:GetSpellIcon(name) then
+	 elseif not texture and MikCEH.hasNampower and GetSpellIdForName then
+		local ok, sid = pcall(GetSpellIdForName, name)
+		if ok and sid and sid ~= 0 then
+			local ok2, iconId = pcall(GetSpellRecField, sid, "spellIconID")
+			if ok2 and iconId then
+				local ok3, tex = pcall(GetSpellIconTexture, iconId)
+				if ok3 and tex then texture = tex; ICON_CACHE[strlower(name)] = tex end
+			end
+		end
+	 elseif not texture and BS and BS.GetSpellIcon and BS:GetSpellIcon(name) then
 		texture = BS:GetSpellIcon(name)
 	 elseif not texture and MikSBT.FindItemIcon(name) then
 		texture = MikSBT.FindItemIcon(name)
@@ -2356,8 +2373,8 @@ function MikSBT.DoAnimation(animDisplayInfo, scrollArea)
 			animDisplayInfo.originalPositionY = animDisplayInfo.PositionY
 	   end
 	   if (elapsedTime - animDisplayInfo.timeLastJiggled > 0.05) then
-	   animDisplayInfo.DecalageX = math.ceil(math.random(-1, 1));
-	   animDisplayInfo.DecalageY = math.ceil(math.random(-1, 1));
+	   animDisplayInfo.DecalageX = math.random(-1, 1);
+	   animDisplayInfo.DecalageY = math.random(-1, 1);
 	   animDisplayInfo.PositionX = animDisplayInfo.originalPositionX + animDisplayInfo.DecalageX;
 	   animDisplayInfo.PositionY = animDisplayInfo.originalPositionY + animDisplayInfo.DecalageY;
 	   animDisplayInfo.timeLastJiggled = elapsedTime;
