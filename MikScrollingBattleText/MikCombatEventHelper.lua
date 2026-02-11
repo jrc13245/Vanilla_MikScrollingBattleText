@@ -176,6 +176,13 @@ local hasNampower = false
 local hasSuperWoW = false
 local hasUnitXP = false
 
+-- Runtime detection flags for CVar-gated Nampower events.
+-- These start false and flip true on first invocation of the corresponding handler,
+-- so CHAT_MSG parsing remains active until the CVar-gated events actually fire.
+local nampowerHealsActive = false
+local nampowerAutoAttackActive = false
+local nampowerEnergizeActive = false
+
 -- Cached player GUID for Nampower event handlers (set in Init when SuperWoW/Nampower present).
 local playerGUID = nil
 
@@ -440,14 +447,20 @@ end
 -- **********************************************************************************
 local combatEventDispatch = {}
 
--- Incoming Melee Hits/Crits
-local function handleIncomingMeleeHits(msg) MikCEH.ParseForIncomingHits(msg) end
+-- Incoming Melee Hits/Crits (CVar-gated: AUTO_ATTACK_OTHER)
+local function handleIncomingMeleeHits(msg)
+ if nampowerAutoAttackActive then return end
+ MikCEH.ParseForIncomingHits(msg)
+end
 combatEventDispatch["CHAT_MSG_COMBAT_CREATURE_VS_SELF_HITS"] = handleIncomingMeleeHits
 combatEventDispatch["CHAT_MSG_COMBAT_HOSTILEPLAYER_HITS"] = handleIncomingMeleeHits
 combatEventDispatch["CHAT_MSG_COMBAT_PARTY_HITS"] = handleIncomingMeleeHits
 
--- Incoming Melee Misses, Dodges, Parries, Blocks, Absorbs, Immunes
-local function handleIncomingMeleeMisses(msg) MikCEH.ParseForIncomingMisses(msg) end
+-- Incoming Melee Misses, Dodges, Parries, Blocks, Absorbs, Immunes (CVar-gated: AUTO_ATTACK_OTHER)
+local function handleIncomingMeleeMisses(msg)
+ if nampowerAutoAttackActive then return end
+ MikCEH.ParseForIncomingMisses(msg)
+end
 combatEventDispatch["CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES"] = handleIncomingMeleeMisses
 combatEventDispatch["CHAT_MSG_COMBAT_HOSTILEPLAYER_MISSES"] = handleIncomingMeleeMisses
 combatEventDispatch["CHAT_MSG_COMBAT_PARTY_MISSES"] = handleIncomingMeleeMisses
@@ -469,8 +482,11 @@ combatEventDispatch["CHAT_MSG_SPELL_DAMAGESHIELDS_ON_OTHERS"] = function(msg)
  MikCEH.ParseForIncomingDamageShieldDamage(msg)
 end
 
--- Incoming Heals
-local function handleIncomingSpellHeals(msg) MikCEH.ParseForIncomingSpellHeals(msg) end
+-- Incoming Heals (CVar-gated: SPELL_HEAL_ON_SELF)
+local function handleIncomingSpellHeals(msg)
+ if nampowerHealsActive then return end
+ MikCEH.ParseForIncomingSpellHeals(msg)
+end
 combatEventDispatch["CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF"] = handleIncomingSpellHeals
 combatEventDispatch["CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF"] = handleIncomingSpellHeals
 
@@ -478,33 +494,36 @@ combatEventDispatch["CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF"] = handleIncomingSpel
 combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_SELF_DAMAGE"] = function(msg)
  if not hasNampower then
   MikCEH.ParseForIncomingDebuffs(msg)
+ end
+ if not nampowerEnergizeActive then
   MikCEH.ParseForPowerGains(msg)
  end
 end
 
 -- Incoming Buffs, HoTs, Power Gains
 combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS"] = function(msg)
- if not hasNampower then
+ if not nampowerHealsActive then
   if not MikCEH.ParseForIncomingSpellHeals(msg) then
-   MikCEH.ParseForIncomingBuffs(msg)
+   if not hasNampower then
+    MikCEH.ParseForIncomingBuffs(msg)
+   end
    MikCEH.ParseForOutgoingHoTs(msg)
   end
  end
- -- When hasNampower: SPELL_ENERGIZE_ON_SELF handles power gains;
- -- event still fires for trigger pattern matching.
 end
 
--- Outgoing Melee Hits/Crits, Environmental Damage
+-- Outgoing Melee Hits/Crits, Environmental Damage (CVar-gated: AUTO_ATTACK_SELF)
 combatEventDispatch["CHAT_MSG_COMBAT_SELF_HITS"] = function(msg)
  if not MikCEH.ParseForEnvironmentalDamage(msg) then
-  if not hasNampower then
+  if not nampowerAutoAttackActive then
    MikCEH.ParseForOutgoingHits(msg)
   end
  end
 end
 
--- Outgoing Melee Misses
+-- Outgoing Melee Misses (CVar-gated: AUTO_ATTACK_SELF)
 combatEventDispatch["CHAT_MSG_COMBAT_SELF_MISSES"] = function(msg)
+ if nampowerAutoAttackActive then return end
  MikCEH.ParseForOutgoingMisses(msg)
 end
 
@@ -518,18 +537,25 @@ combatEventDispatch["CHAT_MSG_SPELL_DAMAGESHIELDS_ON_SELF"] = function(msg)
  MikCEH.ParseForOutgoingDamageShieldDamage(msg)
 end
 
--- Outgoing Heals, Power Gains, Dispel/Purge Resists
+-- Outgoing Heals, Power Gains, Dispel/Purge Resists (CVar-gated: SPELL_HEAL_BY_SELF, SPELL_ENERGIZE_ON_SELF)
 combatEventDispatch["CHAT_MSG_SPELL_SELF_BUFF"] = function(msg)
- if not MikCEH.ParseForPowerGains(msg) then
+ if not nampowerEnergizeActive then
+  if MikCEH.ParseForPowerGains(msg) then return end
+ end
+ if not nampowerHealsActive then
   MikCEH.ParseForOutgoingSpellHeals(msg)
   MikCEH.ParseForOutgoingDispelResists(msg)
  end
 end
 
--- Outgoing HoTs
-local function handleOutgoingHoTs(msg) MikCEH.ParseForOutgoingHoTs(msg) end
+-- Outgoing HoTs (CVar-gated: SPELL_HEAL_BY_SELF)
+local function handleOutgoingHoTs(msg)
+ if nampowerHealsActive then return end
+ MikCEH.ParseForOutgoingHoTs(msg)
+end
 combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_BUFFS"] = handleOutgoingHoTs
 combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_PARTY_BUFFS"] = handleOutgoingHoTs
+combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_CREATURE_BUFFS"] = handleOutgoingHoTs
 
 -- Outgoing DoTs, Power Losses
 local function handleOutgoingDoTs(msg)
@@ -541,13 +567,15 @@ end
 combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE"] = handleOutgoingDoTs
 combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_DAMAGE"] = handleOutgoingDoTs
 
--- Outgoing Pet Hits/Crits
+-- Outgoing Pet Hits/Crits (CVar-gated: AUTO_ATTACK_SELF with pet GUID)
 combatEventDispatch["CHAT_MSG_COMBAT_PET_HITS"] = function(msg)
+ if nampowerAutoAttackActive then return end
  MikCEH.ParseForOutgoingPetHits(msg)
 end
 
--- Outgoing Pet Melee Misses
+-- Outgoing Pet Melee Misses (CVar-gated: AUTO_ATTACK_SELF with pet GUID)
 combatEventDispatch["CHAT_MSG_COMBAT_PET_MISSES"] = function(msg)
+ if nampowerAutoAttackActive then return end
  MikCEH.ParseForOutgoingPetMisses(msg)
 end
 
@@ -616,6 +644,9 @@ function MikCEH.Init()
  MikCEH.hasNampower = hasNampower
  MikCEH.hasSuperWoW = hasSuperWoW
  MikCEH.hasUnitXP = hasUnitXP
+ MikCEH.nampowerHealsActive = false
+ MikCEH.nampowerAutoAttackActive = false
+ MikCEH.nampowerEnergizeActive = false
 
  -- Check Nampower version — v2.33.0+ required for correct event support.
  if not hasNampower then
@@ -922,6 +953,7 @@ end
 -- Args: attackerGuid, targetGuid, totalDamage, hitInfo, victimState, subDamageCount, blockedAmount, totalAbsorb, totalResist
 -- **********************************************************************************
 nampowerHandlers["AUTO_ATTACK_SELF"] = function()
+ nampowerAutoAttackActive = true
  local casterGuid, targetGuid = arg1, arg2
  local damage = arg3
  local hitInfo = arg4
@@ -992,6 +1024,7 @@ end
 -- Args: attackerGuid, targetGuid, totalDamage, hitInfo, victimState, subDamageCount, blockedAmount, totalAbsorb, totalResist
 -- **********************************************************************************
 nampowerHandlers["AUTO_ATTACK_OTHER"] = function()
+ nampowerAutoAttackActive = true
  local casterGuid, targetGuid = arg1, arg2
  local damage = arg3
  local hitInfo = arg4
@@ -1058,6 +1091,7 @@ end
 -- Args: targetGuid, casterGuid, spellId, amount, critical, periodic
 -- **********************************************************************************
 nampowerHandlers["SPELL_HEAL_ON_SELF"] = function()
+ nampowerHealsActive = true
  local targetGuid, casterGuid = arg1, arg2
  local spellId = arg3
  local healAmount = arg4
@@ -1095,6 +1129,7 @@ end
 -- Args: targetGuid, casterGuid, spellId, amount, critical, periodic
 -- **********************************************************************************
 nampowerHandlers["SPELL_HEAL_BY_SELF"] = function()
+ nampowerHealsActive = true
  local targetGuid, casterGuid = arg1, arg2
  local spellId = arg3
  local healAmount = arg4
@@ -1131,6 +1166,7 @@ end
 -- Args: targetGuid, casterGuid, spellId, powerType, amount, periodic
 -- **********************************************************************************
 nampowerHandlers["SPELL_ENERGIZE_ON_SELF"] = function()
+ nampowerEnergizeActive = true
  local spellId = arg3
  local powerType = arg4
  local amount = arg5
@@ -1300,37 +1336,21 @@ function MikCEH.SetupNampowerEvents()
   SetCVar("NP_EnableSpellEnergizeEvents", "1")
  end
 
- -- Events that Nampower covers — these will be removed from listenEvents.
+ -- Events that Nampower covers unconditionally (NOT CVar-gated) — safe to remove.
+ -- CVar-gated events (AUTO_ATTACK, SPELL_HEAL, SPELL_ENERGIZE) are NOT listed here;
+ -- their CHAT_MSG equivalents stay registered as fallback until runtime detection confirms
+ -- the CVar-gated Nampower events are actually firing.
  local nampowerCoveredEvents = {
-  -- Incoming melee hits/misses (covered by AUTO_ATTACK_OTHER)
-  ["CHAT_MSG_COMBAT_CREATURE_VS_SELF_HITS"] = true,
-  ["CHAT_MSG_COMBAT_HOSTILEPLAYER_HITS"] = true,
-  ["CHAT_MSG_COMBAT_PARTY_HITS"] = true,
-  ["CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES"] = true,
-  ["CHAT_MSG_COMBAT_HOSTILEPLAYER_MISSES"] = true,
-  ["CHAT_MSG_COMBAT_PARTY_MISSES"] = true,
-  -- Outgoing melee (covered by AUTO_ATTACK_SELF) — keep COMBAT_SELF_HITS for environmental damage
-  ["CHAT_MSG_COMBAT_SELF_MISSES"] = true,
-  -- Outgoing spell damage (covered by SPELL_DAMAGE_EVENT_SELF)
+  -- Outgoing spell damage (covered by SPELL_DAMAGE_EVENT_SELF — always active)
   ["CHAT_MSG_SPELL_SELF_DAMAGE"] = true,
   ["CHAT_MSG_SPELL_DAMAGESHIELDS_ON_SELF"] = true,
-  -- Incoming spell damage (covered by SPELL_DAMAGE_EVENT_OTHER) — keep some for power losses
+  -- Incoming spell damage shields (covered by SPELL_DAMAGE_EVENT_OTHER — always active)
   ["CHAT_MSG_SPELL_DAMAGESHIELDS_ON_OTHERS"] = true,
-  -- Incoming heals (covered by SPELL_HEAL_ON_SELF)
-  ["CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF"] = true,
-  ["CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF"] = true,
-  -- Outgoing heals (covered by SPELL_HEAL_BY_SELF)
-  ["CHAT_MSG_SPELL_SELF_BUFF"] = true,
-  ["CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_BUFFS"] = true,
-  ["CHAT_MSG_SPELL_PERIODIC_PARTY_BUFFS"] = true,
-  ["CHAT_MSG_SPELL_PERIODIC_CREATURE_BUFFS"] = true,
-  -- Periodic damage (covered by SPELL_DAMAGE_EVENT_SELF with DoT flag)
+  -- Periodic damage (covered by SPELL_DAMAGE_EVENT_SELF with DoT flag — always active)
   ["CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE"] = true,
-  -- Aura notifications (covered by BUFF/DEBUFF_ADDED/REMOVED_SELF)
+  -- Aura notifications (covered by BUFF/DEBUFF_ADDED/REMOVED_SELF — always active)
   ["CHAT_MSG_SPELL_AURA_GONE_SELF"] = true,
-  -- Pet combat (covered by SPELL_DAMAGE_EVENT_SELF/AUTO_ATTACK_SELF with pet GUID check)
-  ["CHAT_MSG_COMBAT_PET_HITS"] = true,
-  ["CHAT_MSG_COMBAT_PET_MISSES"] = true,
+  -- Pet spell damage (covered by SPELL_DAMAGE_EVENT_SELF with pet GUID — always active)
   ["CHAT_MSG_SPELL_PET_DAMAGE"] = true,
  }
 
