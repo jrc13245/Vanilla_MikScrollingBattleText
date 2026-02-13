@@ -3388,8 +3388,10 @@ function MikSBTOpt.SetupVariableTriggerControls(triggerKey, showSearch)
    end
 
    -- Loop through all of the trigger events for the trigger.
-   for  _, triggerEvent in triggerData.TriggerSettings.TriggerEvents do
-    triggerFrame.SelectedTriggerEvents[triggerEvent] = true;
+   if (triggerData.TriggerSettings.TriggerEvents) then
+    for  _, triggerEvent in triggerData.TriggerSettings.TriggerEvents do
+     triggerFrame.SelectedTriggerEvents[triggerEvent] = true;
+    end
    end
 
    -- Populate the appropriate trigger events.
@@ -3533,7 +3535,7 @@ function MikSBTOpt.SaveTriggerConfig()
    -- Save the required stance.
   if UIDropDownMenu_GetSelectedValue(getglobal(TRIGGER_CONFIGURATION_FRAME_NAME .. "StanceDropdown")) ~= 7 then
 	triggerData.TriggerSettings.Stance = UIDropDownMenu_GetSelectedValue(getglobal(TRIGGER_CONFIGURATION_FRAME_NAME .. "StanceDropdown"));
-	if not GetShapeshiftFormInfo(triggerData.TriggerSettings.Stance) then
+	if triggerData.TriggerSettings.Stance > GetNumShapeshiftForms() or not GetShapeshiftFormInfo(triggerData.TriggerSettings.Stance) then
 		MikSBT.Print("No stance found for the selected requirement on this character, this trigger might never occur :o", 1, 1, 0);
 		MikSBT.Print("Also it's dangerous to go alone! take this. o-[====>", 1, 1, 0); --remind me that this is a beta release
 	end

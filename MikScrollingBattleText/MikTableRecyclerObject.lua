@@ -25,6 +25,7 @@ function MikTRO:NewRecyclerObject(maxEntries)
 
  -- Create a table to hold the cache entries and set its max permanent size.
  recyclerObject.PrimaryCache = {};
+ recyclerObject.PrimaryCacheSize = 0;
  recyclerObject.MaxEntries = maxEntries;
 
  -- Create some variables to hold stats.
@@ -62,10 +63,11 @@ end
 function MikTRO:AcquireTable()
  -- Check if there are any tables available in the primary cache and if so
  -- return one.
- if (table.getn(self.PrimaryCache) > 0) then
+ if (self.PrimaryCacheSize > 0) then
   -- Increment the number of recycled tables.
   self.NumRecycled = self.NumRecycled + 1;
 
+  self.PrimaryCacheSize = self.PrimaryCacheSize - 1;
   return table.remove(self.PrimaryCache);
 
  -- Check if there are any tables available in the overflow cache and if so
@@ -101,12 +103,13 @@ function MikTRO:ReclaimTable(t)
  self:EraseTable(t);
 
  -- Check if the primary cache is already full.
- if (table.getn(self.PrimaryCache) >= self.MaxEntries) then
+ if (self.PrimaryCacheSize >= self.MaxEntries) then
   -- Insert the table into the overflow cache.
   table.insert(self.OverflowCache, t);
  else
   -- Insert the table into the primary cache.
   table.insert(self.PrimaryCache, t);
+  self.PrimaryCacheSize = self.PrimaryCacheSize + 1;
  end
 
  -- Increment the number of reclaimed tables.
@@ -123,9 +126,6 @@ function MikTRO:EraseTable(t)
   return;
  end
 
- -- Get the amount of memory used before the clear.
- local currentMem = gcinfo();
-
  -- Loop through all the keys in the table and clear it.
  for key in pairs(t) do
   t[key] = nil;
@@ -134,10 +134,7 @@ function MikTRO:EraseTable(t)
  -- Set the length of the table to 0.
  table.setn(t, 0);
 
- -- Increment the amount of memory freed.
- self.AmountMemFreed = self.AmountMemFreed + math.abs(gcinfo() - currentMem);
-
- -- Incremnt the number of tables erased.
+ -- Increment the number of tables erased.
  self.NumErased = self.NumErased + 1;
 end
 
@@ -155,11 +152,11 @@ function MikTRO:PrintStats()
   "|cff00ff00New Tables: %d|r  |cffffff00Recycled Tables: %d|r  |cff00ffffCached Tables: %d|r  |cffff0000Overflow Tables: %d|r  |cff888888Erased Tables: %d|r  |cffff00ffMemory Saved: %d KiB|r  |cffff0088Tables Lost to GC: %d",
   self.NumNew,
   self.NumRecycled,
-  table.getn(self.PrimaryCache),
+  self.PrimaryCacheSize,
   overflowSize,
   self.NumErased,
   self.AmountMemFreed + ((32/1024) * self.NumRecycled),
-  self.NumReclaimed - self.NumRecycled - table.getn(self.PrimaryCache)));
+  self.NumReclaimed - self.NumRecycled - self.PrimaryCacheSize));
 end
 
 
@@ -167,8 +164,5 @@ end
 -- Checks if there are any tables in the overflow cache.
 -- **********************************************************************************
 function MikTRO:TablesInOverflow()
- -- Loop through all items in the overflow cache.
- for i in pairs(self.OverflowCache) do
-  return true; 
- end
+ return next(self.OverflowCache) ~= nil;
 end

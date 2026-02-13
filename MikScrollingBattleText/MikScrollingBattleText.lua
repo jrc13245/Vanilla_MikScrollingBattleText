@@ -11,10 +11,13 @@
 -- Upvalue caches for frequently called functions.
 local string_find, string_gsub = string.find, string.gsub
 local table_insert, table_getn, table_remove = table.insert, table.getn, table.remove
+local table_setn = table.setn
+local math_ceil, math_floor, math_random = math.ceil, math.floor, math.random
 local GetTime = GetTime
 local getglobal = getglobal
 local strlower = strlower
 local tonumber = tonumber
+local UnitClass = UnitClass
 
 -- Display types for incoming, outgoing, and notification events.
 MikSBT.DISPLAYTYPE_INCOMING			= 1;
@@ -194,6 +197,105 @@ local ANIMATION_STYLE_RIGHT_PARABOLA	= 3;
 local MAX_COMBO_POINTS = 5;
 
 
+-- Pre-built event type string lookup tables (eliminates string concatenation in CombatEventsHandler).
+local DIRECTION_SCROLLAREA_KEY = {
+ [MikCEH.DIRECTIONTYPE_PLAYER_INCOMING] = "Incoming",
+ [MikCEH.DIRECTIONTYPE_PLAYER_OUTGOING] = "Outgoing",
+ [MikCEH.DIRECTIONTYPE_PET_OUTGOING]    = "Outgoing",
+ [MikCEH.DIRECTIONTYPE_PET_INCOMING]    = "Incoming",
+};
+
+local DIRECTION_PREFIX = {
+ [MikCEH.DIRECTIONTYPE_PLAYER_INCOMING] = "MSBT_EVENTTYPE_INCOMING_",
+ [MikCEH.DIRECTIONTYPE_PLAYER_OUTGOING] = "MSBT_EVENTTYPE_OUTGOING_",
+ [MikCEH.DIRECTIONTYPE_PET_OUTGOING]    = "MSBT_EVENTTYPE_OUTGOING_PET_",
+ [MikCEH.DIRECTIONTYPE_PET_INCOMING]    = "MSBT_EVENTTYPE_INCOMING_PET_",
+};
+
+-- Action type → suffix string for damage events.
+local ACTION_SUFFIX = {
+ [MikCEH.ACTIONTYPE_MISS]    = "MISS",
+ [MikCEH.ACTIONTYPE_DODGE]   = "DODGE",
+ [MikCEH.ACTIONTYPE_PARRY]   = "PARRY",
+ [MikCEH.ACTIONTYPE_BLOCK]   = "BLOCK",
+ [MikCEH.ACTIONTYPE_RESIST]  = "RESIST",
+ [MikCEH.ACTIONTYPE_ABSORB]  = "ABSORB",
+ [MikCEH.ACTIONTYPE_IMMUNE]  = "IMMUNE",
+ [MikCEH.ACTIONTYPE_EVADE]   = "EVADE",
+ [MikCEH.ACTIONTYPE_REFLECT] = "REFLECT",
+};
+
+-- Environmental action type → localized effect name.
+local ENVIRONMENTAL_NAMES = {
+ [MikCEH.ACTIONTYPE_DROWNING] = MikSBT.MSG_ENVIRONMENTAL_DROWNING,
+ [MikCEH.ACTIONTYPE_FALLING]  = MikSBT.MSG_ENVIRONMENTAL_FALLING,
+ [MikCEH.ACTIONTYPE_FATIGUE]  = MikSBT.MSG_ENVIRONMENTAL_FATIGUE,
+ [MikCEH.ACTIONTYPE_FIRE]     = MikSBT.MSG_ENVIRONMENTAL_FIRE,
+ [MikCEH.ACTIONTYPE_LAVA]     = MikSBT.MSG_ENVIRONMENTAL_LAVA,
+ [MikCEH.ACTIONTYPE_SLIME]    = MikSBT.MSG_ENVIRONMENTAL_SLIME,
+};
+
+-- Class name → color prefix string for unit name coloring.
+local CLASS_COLORS = {
+ PALADIN  = "|cffF58CBA|h",
+ DRUID    = "|cffFF7D0A|h",
+ HUNTER   = "|cffABD473|h",
+ MAGE     = "|cff69CCF0|h",
+ PRIEST   = "|cffFFFFFF|h",
+ ROGUE    = "|cffFFF569|h",
+ SHAMAN   = "|cff0070DE|h",
+ WARLOCK  = "|cff9482C9|h",
+ WARRIOR  = "|cffC79C6E|h",
+};
+
+-- Notification type → suffix string.
+local NOTIFICATION_SUFFIX = {
+ [MikCEH.NOTIFICATIONTYPE_DEBUFF]          = "DEBUFF",
+ [MikCEH.NOTIFICATIONTYPE_BUFF]            = "BUFF",
+ [MikCEH.NOTIFICATIONTYPE_ITEM_BUFF]       = "ITEM_BUFF",
+ [MikCEH.NOTIFICATIONTYPE_BUFF_FADE]       = "BUFF_FADE",
+ [MikCEH.NOTIFICATIONTYPE_COMBAT_ENTER]    = "COMBAT_ENTER",
+ [MikCEH.NOTIFICATIONTYPE_COMBAT_LEAVE]    = "COMBAT_LEAVE",
+ [MikCEH.NOTIFICATIONTYPE_POWER_GAIN]      = "POWER_GAIN",
+ [MikCEH.NOTIFICATIONTYPE_POWER_LOSS]      = "POWER_LOSS",
+ [MikCEH.NOTIFICATIONTYPE_CP_GAIN]         = "CP_GAIN",
+ [MikCEH.NOTIFICATIONTYPE_HONOR_GAIN]      = "HONOR_GAIN",
+ [MikCEH.NOTIFICATIONTYPE_REP_GAIN]        = "REP_GAIN",
+ [MikCEH.NOTIFICATIONTYPE_REP_LOSS]        = "REP_LOSS",
+ [MikCEH.NOTIFICATIONTYPE_SKILL_GAIN]      = "SKILL_GAIN",
+ [MikCEH.NOTIFICATIONTYPE_EXPERIENCE_GAIN] = "EXPERIENCE_GAIN",
+ [MikCEH.NOTIFICATIONTYPE_PC_KILLING_BLOW] = "PC_KILLING_BLOW",
+ [MikCEH.NOTIFICATIONTYPE_NPC_KILLING_BLOW] = "NPC_KILLING_BLOW",
+};
+
+-- Pre-build all possible event type strings to avoid runtime concatenation.
+-- dmgEventStr[dirType][suffix] for non-spell damage, dmgEventStrSpell[dirType][suffix] for spell damage.
+local dmgEventStr = {};
+local dmgEventStrSpell = {};
+local healEventStr = {};
+local notifEventStr = {};
+
+do
+ local suffixes = {"DAMAGE", "DOT", "MISS", "DODGE", "PARRY", "BLOCK", "RESIST", "ABSORB", "IMMUNE", "EVADE", "REFLECT", "ENVIRONMENTAL"};
+ for dirType, prefix in pairs(DIRECTION_PREFIX) do
+  dmgEventStr[dirType] = {};
+  dmgEventStrSpell[dirType] = {};
+  for _, suffix in ipairs(suffixes) do
+   dmgEventStr[dirType][suffix] = prefix .. suffix;
+   dmgEventStrSpell[dirType][suffix] = prefix .. "SPELL_" .. suffix;
+  end
+  healEventStr[dirType] = {};
+  healEventStr[dirType]["HEAL"] = prefix .. "HEAL";
+  healEventStr[dirType]["HOT"] = prefix .. "HOT";
+ end
+
+ for notifType, suffix in pairs(NOTIFICATION_SUFFIX) do
+  notifEventStr[notifType] = "MSBT_EVENTTYPE_NOTIFICATION_" .. suffix;
+ end
+ notifEventStr["CP_FULL"] = "MSBT_EVENTTYPE_NOTIFICATION_CP_FULL";
+end
+
+
 -------------------------------------------------------------------------------------
 -- Private variables.
 -------------------------------------------------------------------------------------
@@ -344,8 +446,9 @@ function MikSBT.OnUpdate()
    -- Clear the merged animation events array.
    local numMergedEvents = table_getn(mergeData.MergedEvents);
    for i = 1, numMergedEvents do
-    table_remove(mergeData.MergedEvents, 1);
+    mergeData.MergedEvents[i] = nil;
    end
+   table_setn(mergeData.MergedEvents, 0);
 
 
    -- Reset the last merged time.
@@ -506,130 +609,62 @@ function MikSBT.CombatEventsHandler(combatEvent)
  -- Get a recycled table from the events recycler object.
  local animationEvent = eventsRecycler:AcquireTable();
 
- -- Initalize the event type string to the common prefix.
- local eventTypeString = "MSBT_EVENTTYPE_";
-
- -- Append the appropriate direction type to the event type string.
- if (combatEvent.DirectionType == MikCEH.DIRECTIONTYPE_PLAYER_INCOMING) then
-  animationEvent.ScrollArea = scrollAreas.Incoming;
-  eventTypeString = eventTypeString .. "INCOMING_";
- elseif (combatEvent.DirectionType == MikCEH.DIRECTIONTYPE_PLAYER_OUTGOING) then
-  animationEvent.ScrollArea = scrollAreas.Outgoing;
-  eventTypeString = eventTypeString .. "OUTGOING_";
- elseif (combatEvent.DirectionType == MikCEH.DIRECTIONTYPE_PET_OUTGOING) then
-  animationEvent.ScrollArea = scrollAreas.Outgoing;
-  eventTypeString = eventTypeString .. "OUTGOING_PET_";
- elseif (combatEvent.DirectionType == MikCEH.DIRECTIONTYPE_PET_INCOMING) then
-  animationEvent.ScrollArea = scrollAreas.Incoming;
-  eventTypeString = eventTypeString .. "INCOMING_PET_";
+ -- Look up the scroll area and event type string via pre-built tables (no string concatenation).
+ local dirType = combatEvent.DirectionType;
+ local scrollAreaKey = DIRECTION_SCROLLAREA_KEY[dirType];
+ if (scrollAreaKey) then
+  animationEvent.ScrollArea = scrollAreas[scrollAreaKey];
  end
+
+ local eventTypeString;
 
  -- Check if it's a damage event.
  if (combatEvent.EventType == MikCEH.EVENTTYPE_DAMAGE) then
-  -- Check if there is an associated spell/ability name.
-  if (combatEvent.EffectName ~= nil) then
-   eventTypeString = eventTypeString .. "SPELL_";
-  end
+  local actionType = combatEvent.ActionType;
 
-  -- Append the appropriate action type to the event type string.
-  if (combatEvent.ActionType == MikCEH.ACTIONTYPE_HIT) then
-   if (combatEvent.HitType == MikCEH.HITTYPE_OVER_TIME) then
-    eventTypeString = eventTypeString .. "DOT";
+  -- Check for environmental damage (sets EffectName as side effect).
+  local envName = ENVIRONMENTAL_NAMES[actionType];
+  if (envName) then
+   combatEvent.EffectName = envName;
+   eventTypeString = dmgEventStr[dirType] and dmgEventStr[dirType]["ENVIRONMENTAL"];
+  else
+   -- Determine the action suffix.
+   local suffix;
+   if (actionType == MikCEH.ACTIONTYPE_HIT) then
+    suffix = (combatEvent.HitType == MikCEH.HITTYPE_OVER_TIME) and "DOT" or "DAMAGE";
    else
-    eventTypeString = eventTypeString .. "DAMAGE";
+    suffix = ACTION_SUFFIX[actionType];
    end
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_MISS) then
-   eventTypeString = eventTypeString .. "MISS";
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_DODGE) then
-   eventTypeString = eventTypeString .. "DODGE";
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_PARRY) then
-   eventTypeString = eventTypeString .. "PARRY";
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_BLOCK) then
-   eventTypeString = eventTypeString .. "BLOCK";
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_RESIST) then
-   eventTypeString = eventTypeString .. "RESIST";
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_ABSORB) then
-   eventTypeString = eventTypeString .. "ABSORB";
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_IMMUNE) then
-   eventTypeString = eventTypeString .. "IMMUNE";
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_EVADE) then
-   eventTypeString = eventTypeString .. "EVADE";
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_REFLECT) then
-   eventTypeString = eventTypeString .. "REFLECT";
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_DROWNING) then
-   eventTypeString = eventTypeString .. "ENVIRONMENTAL"
-   combatEvent.EffectName = MikSBT.MSG_ENVIRONMENTAL_DROWNING;
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_FALLING) then
-   eventTypeString = eventTypeString .. "ENVIRONMENTAL"
-   combatEvent.EffectName = MikSBT.MSG_ENVIRONMENTAL_FALLING;
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_FATIGUE) then
-   eventTypeString = eventTypeString .. "ENVIRONMENTAL"
-   combatEvent.EffectName = MikSBT.MSG_ENVIRONMENTAL_FATIGUE;
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_FIRE) then
-   eventTypeString = eventTypeString .. "ENVIRONMENTAL"
-   combatEvent.EffectName = MikSBT.MSG_ENVIRONMENTAL_FIRE;
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_LAVA) then
-   eventTypeString = eventTypeString .. "ENVIRONMENTAL"
-   combatEvent.EffectName = MikSBT.MSG_ENVIRONMENTAL_LAVA;
-  elseif (combatEvent.ActionType == MikCEH.ACTIONTYPE_SLIME) then
-   eventTypeString = eventTypeString .. "ENVIRONMENTAL"
-   combatEvent.EffectName = MikSBT.MSG_ENVIRONMENTAL_SLIME;
+
+   -- Use spell or non-spell variant based on whether there is an effect name.
+   if (suffix) then
+    if (combatEvent.EffectName ~= nil) then
+     eventTypeString = dmgEventStrSpell[dirType] and dmgEventStrSpell[dirType][suffix];
+    else
+     eventTypeString = dmgEventStr[dirType] and dmgEventStr[dirType][suffix];
+    end
+   end
   end
 
  -- Heal event.
  elseif (combatEvent.EventType == MikCEH.EVENTTYPE_HEAL) then
-   if (combatEvent.HealType == MikCEH.HEALTYPE_NORMAL or combatEvent.HealType == MikCEH.HEALTYPE_CRIT) then
-     eventTypeString = eventTypeString .. "HEAL";
-   elseif (combatEvent.HealType == MikCEH.HEALTYPE_OVER_TIME) then
-    eventTypeString = eventTypeString .. "HOT";
-   end
-    
+  local suffix = (combatEvent.HealType == MikCEH.HEALTYPE_OVER_TIME) and "HOT" or "HEAL";
+  eventTypeString = healEventStr[dirType] and healEventStr[dirType][suffix];
 
  -- Notification event.
  elseif (combatEvent.EventType == MikCEH.EVENTTYPE_NOTIFICATION) then
   animationEvent.ScrollArea = scrollAreas.Notification;
-  eventTypeString = eventTypeString .. "NOTIFICATION_";
+  local notifType = combatEvent.NotificationType;
 
-  -- Append the appropriate notification type to the event type string.
-  if (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_DEBUFF) then
-   eventTypeString = eventTypeString .. "DEBUFF";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_BUFF) then
-   eventTypeString = eventTypeString .. "BUFF";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_ITEM_BUFF) then
-   eventTypeString = eventTypeString .. "ITEM_BUFF";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_BUFF_FADE) then
-   eventTypeString = eventTypeString .. "BUFF_FADE";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_COMBAT_ENTER) then
-   eventTypeString = eventTypeString .. "COMBAT_ENTER";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_COMBAT_LEAVE) then
-   eventTypeString = eventTypeString .. "COMBAT_LEAVE";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_POWER_GAIN) then
-   eventTypeString = eventTypeString .. "POWER_GAIN";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_POWER_LOSS) then
-   eventTypeString = eventTypeString .. "POWER_LOSS";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_CP_GAIN) then
-   -- Check if we are at max combo points.
-   if (combatEvent.Amount == MAX_COMBO_POINTS) then
-    eventTypeString = eventTypeString .. "CP_FULL";
-   else
-    eventTypeString = eventTypeString .. "CP_GAIN";
+  -- Special case: combo points at max.
+  if (notifType == MikCEH.NOTIFICATIONTYPE_CP_GAIN and combatEvent.Amount == MAX_COMBO_POINTS) then
+   eventTypeString = notifEventStr["CP_FULL"];
+  else
+   eventTypeString = notifEventStr[notifType];
+   -- Fallback for unknown notification types.
+   if (not eventTypeString and notifType ~= nil) then
+    eventTypeString = "MSBT_EVENTTYPE_NOTIFICATION_" .. notifType;
    end
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_HONOR_GAIN) then
-   eventTypeString = eventTypeString .. "HONOR_GAIN";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_REP_GAIN) then
-   eventTypeString = eventTypeString .. "REP_GAIN";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_REP_LOSS) then
-   eventTypeString = eventTypeString .. "REP_LOSS";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_SKILL_GAIN) then
-   eventTypeString = eventTypeString .. "SKILL_GAIN";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_EXPERIENCE_GAIN) then
-   eventTypeString = eventTypeString .. "EXPERIENCE_GAIN";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_PC_KILLING_BLOW) then
-   eventTypeString = eventTypeString .. "PC_KILLING_BLOW";
-  elseif (combatEvent.NotificationType == MikCEH.NOTIFICATIONTYPE_NPC_KILLING_BLOW) then
-   eventTypeString = eventTypeString .. "NPC_KILLING_BLOW";
-  elseif (combatEvent.NotificationType ~= nil) then
-   eventTypeString = eventTypeString .. combatEvent.NotificationType;
   end
  end
 
@@ -894,14 +929,14 @@ function MikSBT.MergeEvents(mergeData, numEvents)
  -- Remove the processed animation events from unmerged events queue.
  for x = 1, numEvents do
   -- Check if the event was merged into a different animation event.
-  if (mergeData.UnmergedEvents[1].EventMerged) then
+  if (mergeData.UnmergedEvents[x] and mergeData.UnmergedEvents[x].EventMerged) then
    -- Reclaim the animation event table to the events recycler.
-   eventsRecycler:ReclaimTable(mergeData.UnmergedEvents[1]);
+   eventsRecycler:ReclaimTable(mergeData.UnmergedEvents[x]);
   end
 
-  -- Remove the event from the unmerged events array.
-  table_remove(mergeData.UnmergedEvents, 1);
+  mergeData.UnmergedEvents[x] = nil;
  end
+ table_setn(mergeData.UnmergedEvents, 0);
 end
 
 
@@ -1695,26 +1730,11 @@ function MikSBT.AddAnimation(animationEvent)
  local unitID = animationEvent._unitID
  local uName = animationEvent._unitName
  if unitID then
-	local _, Class = UnitClass(unitID)
-	if Class and Class == "PALADIN" then
-		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffF58CBA|h"..uName.."|h|r")
-	elseif Class and Class == "DRUID" then
-		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffFF7D0A|h"..uName.."|h|r")
-	elseif Class and Class == "HUNTER" then
-		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffABD473|h"..uName.."|h|r")
-	elseif Class and Class == "MAGE" then
-		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cff69CCF0|h"..uName.."|h|r")
-	elseif Class and Class == "PRIEST" then
-		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffFFFFFF|h"..uName.."|h|r")
-	elseif Class and Class == "ROGUE" then
-		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffFFF569|h"..uName.."|h|r")
-	elseif Class and Class == "SHAMAN" then
-		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cff0070DE|h"..uName.."|h|r")
-	elseif Class and Class == "WARLOCK" then
-		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cff9482C9|h"..uName.."|h|r")
-	elseif Class and Class == "WARRIOR" then
-		animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, "|cffC79C6E|h"..uName.."|h|r")
-	end
+  local _, class = UnitClass(unitID)
+  local colorPrefix = class and CLASS_COLORS[class]
+  if colorPrefix then
+   animationEvent.Text = string_gsub(animationEvent.Text, animationEvent.Name, colorPrefix .. uName .. "|h|r")
+  end
  end
 
  -- Get the next available animation display info object for the scroll area.
@@ -2229,7 +2249,7 @@ function MikSBT.GetAnimationStartingPosition(animationEvent)
   -- Check if it's a sticky or a crit and sticky crits are enabled.
   if (animationEvent.IsSticky or (animationEvent.IsCrit and MikSBT.CurrentProfile.UseStickyCrits)) then
    -- Set the sticky to the center.
-   startPositionY = ceil(animationEvent.ScrollArea.DisplaySettings.ScrollHeight / 2);
+   startPositionY = math_ceil(animationEvent.ScrollArea.DisplaySettings.ScrollHeight / 2);
   end
  end
 
@@ -2300,8 +2320,9 @@ function MikSBT.RepositionAnimDisplayInfo(scrollArea)
 
  -- Clear the temp non stickies table.
  for x = 1, numNonStickies do
-  table_remove(activeNonStickies, 1);
+  activeNonStickies[x] = nil;
  end
+ table_setn(activeNonStickies, 0);
 end
 
 
@@ -2339,7 +2360,7 @@ function MikSBT.RepositionStickyAnimDisplayInfo(scrollArea)
    -- Check if there is more than 1 active sticky animation.
    if (numStickies > 1) then
     -- Get the middle active sticky.
-    local middleSticky = floor((numStickies + 1) / 2);
+    local middleSticky = math_floor((numStickies + 1) / 2);
 
     -- Set the middle sticky to the center of the scroll area.
     activeStickies[middleSticky].PositionY = scrollArea.DisplaySettings.ScrollHeight / 2;
@@ -2361,7 +2382,7 @@ function MikSBT.RepositionStickyAnimDisplayInfo(scrollArea)
    -- Check if there is more than 1 active sticky animation.
    if (numStickies > 1) then
     -- Get the middle active sticky.
-    local middleSticky = ceil((numStickies + 1) / 2);
+    local middleSticky = math_ceil((numStickies + 1) / 2);
 
     -- Set the middle sticky to the center of the scroll area.
     activeStickies[middleSticky].PositionY = scrollArea.DisplaySettings.ScrollHeight / 2;
@@ -2382,8 +2403,9 @@ function MikSBT.RepositionStickyAnimDisplayInfo(scrollArea)
 
  -- Clear the temp stickies table.
  for x = 1, numStickies do
-  table_remove(activeStickies, 1);
+  activeStickies[x] = nil;
  end
+ table_setn(activeStickies, 0);
 end
 
 
@@ -2430,8 +2452,8 @@ function MikSBT.DoAnimation(animDisplayInfo, scrollArea)
 			animDisplayInfo.originalPositionY = animDisplayInfo.PositionY
 	   end
 	   if (elapsedTime - animDisplayInfo.timeLastJiggled > 0.05) then
-	   animDisplayInfo.DecalageX = math.random(-1, 1);
-	   animDisplayInfo.DecalageY = math.random(-1, 1);
+	   animDisplayInfo.DecalageX = math_random(-1, 1);
+	   animDisplayInfo.DecalageY = math_random(-1, 1);
 	   animDisplayInfo.PositionX = animDisplayInfo.originalPositionX + animDisplayInfo.DecalageX;
 	   animDisplayInfo.PositionY = animDisplayInfo.originalPositionY + animDisplayInfo.DecalageY;
 	   animDisplayInfo.timeLastJiggled = elapsedTime;
@@ -2582,9 +2604,9 @@ function MikSBT.ScrollLeftParabolaUp(animDisplayInfo, scrollArea)
 
  -- Calculate the new x position based on equation of a parabola.
  -- Equation of a parabola at vertex 0,0: x = y^2 / 4a
- local parabolaMaxX = ceil((animationMidPoint * animationMidPoint) / (4 * animationMidPoint));
+ local parabolaMaxX = math_ceil((animationMidPoint * animationMidPoint) / (4 * animationMidPoint));
  local parabolaY = animDisplayInfo.PositionY - animationMidPoint;
- local newX = parabolaMaxX - ceil((parabolaY * parabolaY) / (4 * animationMidPoint));
+ local newX = parabolaMaxX - math_ceil((parabolaY * parabolaY) / (4 * animationMidPoint));
 
  -- Set the new x position.
  animDisplayInfo.PositionX = newX * -1;
@@ -2607,9 +2629,9 @@ function MikSBT.ScrollLeftParabolaDown(animDisplayInfo, scrollArea)
 
  -- Calculate the new x position based on equation of a parabola.
  -- Equation of a parabola at vertex 0,0: x = y^2 / 4a
- local parabolaMaxX = ceil((animationMidPoint * animationMidPoint) / (4 * animationMidPoint));
+ local parabolaMaxX = math_ceil((animationMidPoint * animationMidPoint) / (4 * animationMidPoint));
  local parabolaY = animDisplayInfo.PositionY - animationMidPoint;
- local newX = parabolaMaxX - ceil((parabolaY * parabolaY) / (4 * animationMidPoint));
+ local newX = parabolaMaxX - math_ceil((parabolaY * parabolaY) / (4 * animationMidPoint));
 
  -- Set the new x position.
  animDisplayInfo.PositionX = newX * -1;
@@ -2632,9 +2654,9 @@ function MikSBT.ScrollRightParabolaUp(animDisplayInfo, scrollArea)
 
  -- Calculate the new x position based on equation of a parabola.
  -- Equation of a parabola at vertex 0,0: x = y^2 / 4a
- local parabolaMaxX = ceil((animationMidPoint * animationMidPoint) / (4 * animationMidPoint));
+ local parabolaMaxX = math_ceil((animationMidPoint * animationMidPoint) / (4 * animationMidPoint));
  local parabolaY = animDisplayInfo.PositionY - animationMidPoint;
- local newX = parabolaMaxX - ceil((parabolaY * parabolaY) / (4 * animationMidPoint));
+ local newX = parabolaMaxX - math_ceil((parabolaY * parabolaY) / (4 * animationMidPoint));
 
  -- Set the new x position.
  animDisplayInfo.PositionX = newX;
@@ -2657,9 +2679,9 @@ function MikSBT.ScrollRightParabolaDown(animDisplayInfo, scrollArea)
 
  -- Calculate the new x position based on equation of a parabola.
  -- Equation of a parabola at vertex 0,0: x = y^2 / 4a
- local parabolaMaxX = ceil((animationMidPoint * animationMidPoint) / (4 * animationMidPoint));
+ local parabolaMaxX = math_ceil((animationMidPoint * animationMidPoint) / (4 * animationMidPoint));
  local parabolaY = animDisplayInfo.PositionY - animationMidPoint;
- local newX = parabolaMaxX - ceil((parabolaY * parabolaY) / (4 * animationMidPoint));
+ local newX = parabolaMaxX - math_ceil((parabolaY * parabolaY) / (4 * animationMidPoint));
 
  -- Set the new x position.
  animDisplayInfo.PositionX = newX;
