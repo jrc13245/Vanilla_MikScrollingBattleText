@@ -186,6 +186,8 @@ local nampowerHealsActive = false
 local nampowerAutoAttackActive = false
 local nampowerEnergizeActive = false
 local nampowerSpellDamageActive = false
+local nampowerPetAutoAttackActive = false
+local nampowerPetSpellDamageActive = false
 
 -- Cached player GUID for Nampower event handlers (set in Init when SuperWoW/Nampower present).
 local playerGUID = nil
@@ -590,19 +592,19 @@ combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_DAMAGE"] = handleOutg
 
 -- Outgoing Pet Hits/Crits (CVar-gated: AUTO_ATTACK_SELF with pet GUID)
 combatEventDispatch["CHAT_MSG_COMBAT_PET_HITS"] = function(msg)
- if nampowerAutoAttackActive then return end
+ if nampowerPetAutoAttackActive then return end
  MikCEH.ParseForOutgoingPetHits(msg)
 end
 
 -- Outgoing Pet Melee Misses (CVar-gated: AUTO_ATTACK_SELF with pet GUID)
 combatEventDispatch["CHAT_MSG_COMBAT_PET_MISSES"] = function(msg)
- if nampowerAutoAttackActive then return end
+ if nampowerPetAutoAttackActive then return end
  MikCEH.ParseForOutgoingPetMisses(msg)
 end
 
 -- Outgoing Pet Spell/Ability Damage (Nampower: SPELL_DAMAGE_EVENT_SELF with pet GUID)
 combatEventDispatch["CHAT_MSG_SPELL_PET_DAMAGE"] = function(msg)
- if nampowerSpellDamageActive then return end
+ if nampowerPetSpellDamageActive then return end
  MikCEH.ParseForOutgoingPetSpellHitsAndMisses(msg)
 end
 
@@ -671,6 +673,8 @@ function MikCEH.Init()
  MikCEH.nampowerAutoAttackActive = false
  MikCEH.nampowerEnergizeActive = false
  MikCEH.nampowerSpellDamageActive = false
+ MikCEH.nampowerPetAutoAttackActive = false
+ MikCEH.nampowerPetSpellDamageActive = false
 
  -- Check Nampower version — v2.33.0+ required for correct event support.
  if not hasNampower then
@@ -900,14 +904,13 @@ nampowerHandlers["SPELL_DAMAGE_EVENT_SELF"] = function()
  local directionType
  if IsPlayerGUID(casterGuid) then
   directionType = MikCEH.DIRECTIONTYPE_PLAYER_OUTGOING
+  nampowerSpellDamageActive = true
  elseif IsPetGUID(casterGuid) then
   directionType = MikCEH.DIRECTIONTYPE_PET_OUTGOING
+  nampowerPetSpellDamageActive = true
  else
   return -- Not from player or pet, ignore.
  end
-
- -- Disable CHAT_MSG fallback now that we've confirmed this handler fires.
- nampowerSpellDamageActive = true
 
  local spellName = GetSpellNameFromId(spellId)
  local damageType = SchoolToDamageType(spellSchool)
@@ -1011,14 +1014,13 @@ nampowerHandlers["AUTO_ATTACK_SELF"] = function()
  local directionType
  if IsPlayerGUID(casterGuid) then
   directionType = MikCEH.DIRECTIONTYPE_PLAYER_OUTGOING
+  nampowerAutoAttackActive = true
  elseif IsPetGUID(casterGuid) then
   directionType = MikCEH.DIRECTIONTYPE_PET_OUTGOING
+  nampowerPetAutoAttackActive = true
  else
   return
  end
-
- -- Only disable CHAT_MSG fallback after we've confirmed playerGUID works.
- nampowerAutoAttackActive = true
 
  local targetName = GetNameFromGUID(targetGuid)
  local actionType = nampowerVictimStateToAction[victimState] or MikCEH.ACTIONTYPE_HIT
@@ -1084,14 +1086,12 @@ nampowerHandlers["AUTO_ATTACK_OTHER"] = function()
  local directionType
  if IsPlayerGUID(targetGuid) then
   directionType = MikCEH.DIRECTIONTYPE_PLAYER_INCOMING
+  nampowerAutoAttackActive = true
  elseif IsPetGUID(targetGuid) then
   directionType = MikCEH.DIRECTIONTYPE_PET_INCOMING
  else
   return
  end
-
- -- Only disable CHAT_MSG fallback after we've confirmed playerGUID works.
- nampowerAutoAttackActive = true
 
  local casterName = GetNameFromGUID(casterGuid)
  local actionType = nampowerVictimStateToAction[victimState] or MikCEH.ACTIONTYPE_HIT
@@ -1251,15 +1251,22 @@ nampowerHandlers["SPELL_MISS_SELF"] = function()
  local spellId = arg3
  local missInfo = arg4
 
- if not IsPlayerGUID(casterGuid) then return end
-
- nampowerSpellDamageActive = true
+ local directionType
+ if IsPlayerGUID(casterGuid) then
+  directionType = MikCEH.DIRECTIONTYPE_PLAYER_OUTGOING
+  nampowerSpellDamageActive = true
+ elseif IsPetGUID(casterGuid) then
+  directionType = MikCEH.DIRECTIONTYPE_PET_OUTGOING
+  nampowerPetSpellDamageActive = true
+ else
+  return
+ end
 
  local spellName = GetSpellNameFromId(spellId)
  local targetName = GetNameFromGUID(targetGuid)
  local actionType = nampowerMissToAction[missInfo] or MikCEH.ACTIONTYPE_MISS
 
- local eventData = MikCEH.GetDamageEventData(MikCEH.DIRECTIONTYPE_PLAYER_OUTGOING, actionType, nil, nil, nil, spellName, targetName)
+ local eventData = MikCEH.GetDamageEventData(directionType, actionType, nil, nil, nil, spellName, targetName)
  eventData.SpellId = spellId
 
  MikCEH.SendEvent(eventData)
