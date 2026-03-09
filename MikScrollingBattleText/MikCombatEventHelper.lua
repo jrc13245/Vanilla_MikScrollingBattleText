@@ -1171,7 +1171,7 @@ nampowerHandlers["SPELL_HEAL_ON_SELF"] = function()
  -- Populate overheal data.
  eventData.Name = playerName
  MikCEH.PopulateOverhealData(eventData)
-
+ eventData.Name = casterName
  MikCEH.SendEvent(eventData)
 end
 
