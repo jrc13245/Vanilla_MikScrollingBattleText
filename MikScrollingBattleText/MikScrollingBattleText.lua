@@ -1417,6 +1417,24 @@ function MikSBT.UpdateProfiles()
    profile.CreationVersion = 4.5;
   end
 
+  if (profile.CreationVersion < 4.6) then
+   -- Add missing incoming evade/reflect event settings (needed for Nampower events).
+   local incomingMissEvents = {
+    "MSBT_EVENTTYPE_INCOMING_EVADE",
+    "MSBT_EVENTTYPE_INCOMING_SPELL_EVADE",
+    "MSBT_EVENTTYPE_INCOMING_PET_EVADE",
+    "MSBT_EVENTTYPE_INCOMING_PET_SPELL_EVADE",
+    "MSBT_EVENTTYPE_INCOMING_PET_SPELL_REFLECT",
+   };
+   for _, evtName in incomingMissEvents do
+    if not profile.EventSettings[evtName] and MikSBT.DEFAULT_CONFIG.EventSettings[evtName] then
+     profile.EventSettings[evtName] = MikSBT.CopyTable(MikSBT.DEFAULT_CONFIG.EventSettings[evtName]);
+    end
+   end
+
+   profile.CreationVersion = 4.6;
+  end
+
  end
 end
 
