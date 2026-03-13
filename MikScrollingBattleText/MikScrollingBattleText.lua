@@ -124,6 +124,8 @@ ICON_CACHE["morsure fatale"] =					"Interface\\Icons\\ability_backstab"
 ICON_CACHE["explosion sonore"] =				"Interface\\Icons\\spell_shadow_teleport"
 ICON_CACHE["flammes"] =							"Interface\\Icons\\spell_fire_fire"
 ICON_CACHE["effet inferno"] =					"Interface\\Icons\\spell_fire_incinerate"
+ICON_CACHE["flametongue attack"] = 				"Interface\\Icons\\Spell_Nature_GuardianWard"
+ICON_CACHE["stratholme holy water"] = 			"Interface\\Icons\\Inv_Potion_75"
 
 
 -- Cache des spells dont l'icone n'a pas été trouvée
