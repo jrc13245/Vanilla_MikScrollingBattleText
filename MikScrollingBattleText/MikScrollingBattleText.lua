@@ -1783,9 +1783,8 @@ function MikSBT.AddAnimation(animationEvent)
   animDisplayInfo.ColorG = animationEvent.EventSettings.FontSettings.Color.g;
   animDisplayInfo.ColorB = animationEvent.EventSettings.FontSettings.Color.b;
 
-  -- Override font color based on spell school damage type (outgoing only).
-  if animationEvent.DamageType and animationEvent.EventType
-     and string_find(animationEvent.EventType, "OUTGOING") then
+  -- Override font color based on spell school damage type.
+  if animationEvent.DamageType and animationEvent.EventType then
    local dtColor = GetDamageTypeFontColor(animationEvent.DamageType)
    if dtColor then
     animDisplayInfo.ColorR = dtColor.r

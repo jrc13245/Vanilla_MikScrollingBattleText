@@ -901,9 +901,15 @@ nampowerHandlers["SPELL_DAMAGE_EVENT_SELF"] = function()
  local effectAuraStr = arg8
 
  -- Determine direction: player outgoing, or pet outgoing.
+ -- Special case: if the player is both caster and target (e.g. Hellfire self-damage,
+ -- spell reflects), route as incoming since the player is taking damage.
  local directionType
  if IsPlayerGUID(casterGuid) then
-  directionType = MikCEH.DIRECTIONTYPE_PLAYER_OUTGOING
+  if IsPlayerGUID(targetGuid) then
+   directionType = MikCEH.DIRECTIONTYPE_PLAYER_INCOMING
+  else
+   directionType = MikCEH.DIRECTIONTYPE_PLAYER_OUTGOING
+  end
   nampowerSpellDamageActive = true
  elseif IsPetGUID(casterGuid) then
   directionType = MikCEH.DIRECTIONTYPE_PET_OUTGOING
