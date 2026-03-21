@@ -1833,7 +1833,13 @@ function MikSBT.AddAnimation(animationEvent)
  -- SetTextHeight does NOT apply if the original font size wouldn't be changed by it
  -- FontSize tops out at 32 and in vanilla doesn't seem to apply at all - every different size I've tried has refused to work
  -- TextHeight does scale past 32, but expectedly becomes blurry - still better than unreadable numbers on a 4k display
- animDisplayInfo.FontObject:SetFont(animDisplayInfo.FontPath, animDisplayInfo.FontSize-1, animDisplayInfo.FontOutline);
+ local fontSize = animDisplayInfo.FontSize;
+ if (not fontSize or fontSize < 2) then fontSize = 18; end
+ animDisplayInfo.FontObject:SetFont(animDisplayInfo.FontPath, fontSize-1, animDisplayInfo.FontOutline);
+ -- Fall back to default font if the configured font file was not found.
+ if (not animDisplayInfo.FontObject:GetFont()) then
+  animDisplayInfo.FontObject:SetFont("Fonts\\FRIZQT__.TTF", fontSize-1, animDisplayInfo.FontOutline);
+ end
  animDisplayInfo.FontObject:SetTextColor(animDisplayInfo.ColorR, animDisplayInfo.ColorG, animDisplayInfo.ColorB);
  animDisplayInfo.FontObject:SetText(animationEvent.Text);
  animDisplayInfo.FontObject:SetTextHeight(animDisplayInfo.FontSize);
