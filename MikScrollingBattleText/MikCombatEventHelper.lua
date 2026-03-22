@@ -186,6 +186,7 @@ local nampowerHealsActive = false
 local nampowerAutoAttackActive = false
 local nampowerEnergizeActive = false
 local nampowerSpellDamageActive = false
+local nampowerBuffsActive = false
 local nampowerPetAutoAttackActive = false
 local nampowerPetSpellDamageActive = false
 
@@ -513,7 +514,7 @@ combatEventDispatch["CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF"] = handleIncomingSpel
 
 -- Incoming Debuffs, DoTs, Power Gains
 combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_SELF_DAMAGE"] = function(msg)
- if not nampowerSpellDamageActive then
+ if not nampowerBuffsActive and not nampowerSpellDamageActive then
   MikCEH.ParseForIncomingDebuffs(msg)
  end
  if not nampowerEnergizeActive then
@@ -525,7 +526,7 @@ end
 combatEventDispatch["CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS"] = function(msg)
  if not nampowerHealsActive then
   if not MikCEH.ParseForIncomingSpellHeals(msg) then
-   if not nampowerSpellDamageActive then
+   if not nampowerBuffsActive and not nampowerSpellDamageActive then
     MikCEH.ParseForIncomingBuffs(msg)
    end
    MikCEH.ParseForOutgoingHoTs(msg)
@@ -673,6 +674,7 @@ function MikCEH.Init()
  MikCEH.nampowerAutoAttackActive = false
  MikCEH.nampowerEnergizeActive = false
  MikCEH.nampowerSpellDamageActive = false
+ MikCEH.nampowerBuffsActive = false
  MikCEH.nampowerPetAutoAttackActive = false
  MikCEH.nampowerPetSpellDamageActive = false
 
@@ -1316,9 +1318,15 @@ end
 nampowerHandlers["BUFF_ADDED_SELF"] = function()
  local unitGuid = arg1
  local spellId = arg3
+ local state = arg7
 
  -- Only for player.
  if not IsPlayerGUID(unitGuid) then return end
+
+ nampowerBuffsActive = true
+
+ -- Only notify for newly added buffs (state 0), not stack changes (state 2).
+ if state ~= 0 then return end
 
  local spellName = GetSpellNameFromId(spellId)
  if not spellName then return end
@@ -1337,9 +1345,15 @@ end
 nampowerHandlers["DEBUFF_ADDED_SELF"] = function()
  local unitGuid = arg1
  local spellId = arg3
+ local state = arg7
 
  -- Only for player.
  if not IsPlayerGUID(unitGuid) then return end
+
+ nampowerBuffsActive = true
+
+ -- Only notify for newly added debuffs (state 0), not stack changes (state 2).
+ if state ~= 0 then return end
 
  local spellName = GetSpellNameFromId(spellId)
  if not spellName then return end
@@ -1421,7 +1435,7 @@ function MikCEH.SetupNampowerEvents()
 
  -- Events to keep despite Nampower — these have partial or no Nampower equivalent.
  -- CHAT_MSG_SPELL_PERIODIC_SELF_DAMAGE: Keep for power gains (no Nampower equivalent for all gain types)
- -- CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS: Keep for power gains and buffs from periodic sources
+ -- CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS: Keep for power gains (buff parsing gated by nampowerBuffsActive)
  -- CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE: Keep for power losses (ParseForPowerLosses)
  -- CHAT_MSG_SPELL_CREATURE_VS_CREATURE_DAMAGE: Keep for power losses
  -- CHAT_MSG_SPELL_HOSTILEPLAYER_DAMAGE: Keep for power losses
